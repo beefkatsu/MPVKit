@@ -5,6 +5,7 @@ on:
     inputs:
       version:
         description: 'Release tag name (default mpv version)'
+        required: false
         default: ''
 
 jobs:

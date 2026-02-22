@@ -81,19 +81,39 @@ jobs:
           # Fix URLs to point at this fork instead of upstream
           sed -i '' "s#github.com/mpvkit/MPVKit#github.com/beefkatsu/MPVKit#g" ./Package.swift
           # Remove GPL product, targets, and binary targets (we only build LGPL)
-          python3 -c "
+          python3 << 'PYEOF'
           import re
+
           with open('./Package.swift', 'r') as f:
-              content = f.read()
-          # Remove GPL library product
-          content = re.sub(r',?\s*\.library\(\s*name:\s*\"MPVKit-GPL\"[^)]*\)', '', content)
-          # Remove GPL wrapper targets and binary targets
-          content = re.sub(r'\s*\.target\(\s*name:\s*\"_MPVKit-GPL\".*?\),', '', content, flags=re.DOTALL)
-          content = re.sub(r'\s*\.target\(\s*name:\s*\"_FFmpeg-GPL\".*?\),', '', content, flags=re.DOTALL)
-          content = re.sub(r'\s*\.binaryTarget\(\s*name:\s*\"[^\"]*-GPL\".*?\),', '', content, flags=re.DOTALL)
+              lines = f.readlines()
+
+          # Remove any line block that contains "GPL" by tracking brace/bracket depth
+          result = []
+          skip_depth = 0
+          i = 0
+          while i < len(lines):
+              line = lines[i]
+              # Start skipping if this line begins a GPL product/target/binaryTarget
+              if skip_depth == 0 and 'GPL' in line and any(k in line for k in ['.library(', '.target(', '.binaryTarget(']):
+                  # Count back to grab leading whitespace/comma on previous lines
+                  # Track parens to find the end of this block
+                  skip_depth = line.count('(') - line.count(')')
+                  i += 1
+                  continue
+              if skip_depth > 0:
+                  skip_depth += line.count('(') - line.count(')')
+                  i += 1
+                  continue
+              # Also skip standalone GPL references (e.g. in dependencies arrays)
+              if 'GPL' in line:
+                  i += 1
+                  continue
+              result.append(line)
+              i += 1
+
           with open('./Package.swift', 'w') as f:
-              f.write(content)
-          "
+              f.writelines(result)
+          PYEOF
 
 
       - name: Push Package.swift

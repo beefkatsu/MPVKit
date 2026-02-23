@@ -908,8 +908,8 @@ class ZipBaseBuild : BaseBuild {
         try! FileManager.default.createDirectory(atPath: directoryURL.path, withIntermediateDirectories: true, attributes: nil)
 
         if !FileManager.default.fileExists(atPath: outputFile.path) {
-            try! Utility.launch(path: "/usr/bin/curl", arguments: ["-L", "-o", outputFileName, library.url], currentDirectoryURL: directoryURL)
-            try! Utility.launch(path: "/usr/bin/unzip", arguments: ["-o",outputFileName], currentDirectoryURL: directoryURL)
+            try! Utility.launch(path: "/usr/bin/curl", arguments: ["-fL", "-o", outputFile.path, library.url], currentDirectoryURL: directoryURL)
+            try! Utility.launch(path: "/usr/bin/unzip", arguments: ["-o", outputFile.path], currentDirectoryURL: directoryURL)
         }
     }
 

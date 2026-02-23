@@ -730,7 +730,7 @@ class BaseBuild {
                 if FileManager.default.fileExists(atPath: tmpChecksum.path) {
                     try? FileManager.default.removeItem(at: tmpChecksum)
                 }
-                try! Utility.launch(path: "/usr/bin/curl", arguments: ["-sL", "-o", tmpChecksum.path, target.checksum], currentDirectoryURL: FileManager.default.temporaryDirectory)
+                try! Utility.launch(path: "wget", arguments: ["-q", "-O", tmpChecksum.path, target.checksum], currentDirectoryURL: FileManager.default.temporaryDirectory)
                 let checksum = try String(contentsOf: tmpChecksum, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
                 dependencyTargetContent += """
                 
@@ -908,8 +908,8 @@ class ZipBaseBuild : BaseBuild {
         try! FileManager.default.createDirectory(atPath: directoryURL.path, withIntermediateDirectories: true, attributes: nil)
 
         if !FileManager.default.fileExists(atPath: outputFile.path) {
-            try! Utility.launch(path: "/usr/bin/curl", arguments: ["-fL", "--retry", "3", "--retry-delay", "5", "--retry-all-errors", "-o", outputFile.path, library.url], currentDirectoryURL: directoryURL)
-            try! Utility.launch(path: "/usr/bin/unzip", arguments: ["-o", outputFile.path], currentDirectoryURL: directoryURL)
+            try! Utility.launch(path: "wget", arguments: ["-O", outputFileName, library.url], currentDirectoryURL: directoryURL)
+            try! Utility.launch(path: "/usr/bin/unzip", arguments: ["-o",outputFileName], currentDirectoryURL: directoryURL)
         }
     }
 

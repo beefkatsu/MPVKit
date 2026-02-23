@@ -908,7 +908,7 @@ class ZipBaseBuild : BaseBuild {
         try! FileManager.default.createDirectory(atPath: directoryURL.path, withIntermediateDirectories: true, attributes: nil)
 
         if !FileManager.default.fileExists(atPath: outputFile.path) {
-            try! Utility.launch(path: "/usr/bin/curl", arguments: ["-fL", "--retry", "3", "--retry-delay", "5", "-o", outputFile.path, library.url], currentDirectoryURL: directoryURL)
+            try! Utility.launch(path: "/usr/bin/curl", arguments: ["-fL", "--retry", "3", "--retry-delay", "5", "--retry-all-errors", "-o", outputFile.path, library.url], currentDirectoryURL: directoryURL)
             try! Utility.launch(path: "/usr/bin/unzip", arguments: ["-o", outputFile.path], currentDirectoryURL: directoryURL)
         }
     }

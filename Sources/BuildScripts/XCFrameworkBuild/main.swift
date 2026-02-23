@@ -17,8 +17,10 @@ do {
     try BuildHarfbuzz().buildALL()
     try BuildASS().buildALL()
 
-    // libsmbclient
-    try BuildSmbclient().buildALL()
+    // libsmbclient (GPL only)
+    if BaseBuild.options.enableGPL {
+        try BuildSmbclient().buildALL()
+    }
 
     // libbluray
     try BuildBluray().buildALL()

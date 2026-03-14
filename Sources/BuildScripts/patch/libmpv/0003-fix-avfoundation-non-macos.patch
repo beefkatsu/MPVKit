@@ -75,7 +75,15 @@ diff --git forkSrcPrefix/audio/out/ao_coreaudio_chmap.h forkDstPrefix/audio/out/
 diff --git forkSrcPrefix/audio/out/ao_coreaudio_chmap.c forkDstPrefix/audio/out/ao_coreaudio_chmap.c
 --- forkSrcPrefix/audio/out/ao_coreaudio_chmap.c
 +++ forkDstPrefix/audio/out/ao_coreaudio_chmap.c
-@@ -337,7 +337,9 @@
+@@ -22,7 +22,6 @@
+ #include "ao_coreaudio_utils.h"
+ 
+ #include "ao_coreaudio_chmap.h"
+-#include <CoreAudioTypes/CoreAudioTypes.h>
+ 
+ static const int speaker_map[][2] = {
+     { kAudioChannelLabel_Left,                 MP_SPEAKER_ID_FL   },
+@@ -337,7 +336,9 @@
          *out_layout_size = layout_size;
      return layout;
  }
@@ -151,3 +159,18 @@ diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_
 +#endif
      .priv_size      = sizeof(struct priv),
  };
+
+diff --git forkSrcPrefix/meson.build forkDstPrefix/meson.build
+--- forkSrcPrefix/meson.build
++++ forkDstPrefix/meson.build
+@@ -419,6 +419,10 @@
+                      'osdep/mac/app_bridge.m',
+                      'player/clipboard/clipboard-mac.m')
+     main_fn_source = files('osdep/main-fn-mac.c')
++endif
++
++if features['avfoundation'] and not features['cocoa']
++    sources += files('osdep/utils-mac.c')
+ endif
+ 
+ if posix

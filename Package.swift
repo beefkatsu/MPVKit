@@ -10,8 +10,6 @@ let package = Package(
             name: "MPVKit",
             targets: ["_MPVKit"]
         ),
-        .library(
-        ),
     ],
     targets: [
         .target(
@@ -50,54 +48,6 @@ let package = Package(
                 .linkedLibrary("z"),
                 .linkedLibrary("c++"),
             ]
-        ),
-        .target(
-            dependencies: [
-                .target(name: "Libluajit", condition: .when(platforms: [.macOS])),
-            ],
-            linkerSettings: [
-                .linkedFramework("AVFoundation"),
-                .linkedFramework("CoreAudio"),
-            ]
-        ),
-        .target(
-            dependencies: [
-                "Libssl", "Libcrypto", "Libass", "Libfreetype", "Libfribidi", "Libharfbuzz",
-                "MoltenVK", "Libshaderc_combined", "lcms2", "Libplacebo", "Libdovi", "Libunibreak",
-                "Libsmbclient", "gmp", "nettle", "hogweed", "gnutls", "Libdav1d", "Libuavs3d"
-            ],
-            linkerSettings: [
-                .linkedFramework("AudioToolbox"),
-                .linkedFramework("CoreVideo"),
-                .linkedFramework("CoreFoundation"),
-                .linkedFramework("CoreMedia"),
-                .linkedFramework("Metal"),
-                .linkedFramework("VideoToolbox"),
-                .linkedLibrary("bz2"),
-                .linkedLibrary("iconv"),
-                .linkedLibrary("expat"),
-                .linkedLibrary("resolv"),
-                .linkedLibrary("xml2"),
-                .linkedLibrary("z"),
-                .linkedLibrary("c++"),
-            ]
-        ),
-
-        .binaryTarget(
-        ),
-        .binaryTarget(
-        ),
-        .binaryTarget(
-        ),
-        .binaryTarget(
-        ),
-        .binaryTarget(
-        ),
-        .binaryTarget(
-        ),
-        .binaryTarget(
-        ),
-        .binaryTarget(
         ),
         //AUTO_GENERATE_TARGETS_BEGIN//
 
@@ -163,12 +113,6 @@ let package = Package(
             name: "Libass",
             url: "https://github.com/mpvkit/libass-build/releases/download/0.17.4/Libass.xcframework.zip",
             checksum: "1e41f5a69c74f6c6407aab84a65ccd0b34e73fa44465f488f99bf22bd61b070d"
-        ),
-
-        .binaryTarget(
-            name: "Libsmbclient",
-            url: "https://github.com/mpvkit/libsmbclient-build/releases/download/4.15.13-2512/Libsmbclient.xcframework.zip",
-            checksum: "3a53375fab11bc888cc553664ea5dd902208d04f0cc21ec746302bf356246b6f"
         ),
 
         .binaryTarget(

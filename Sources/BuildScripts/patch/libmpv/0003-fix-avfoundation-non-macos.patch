@@ -3,17 +3,17 @@ diff --git forkSrcPrefix/audio/out/ao_coreaudio_utils.h forkDstPrefix/audio/out/
 +++ forkDstPrefix/audio/out/ao_coreaudio_utils.h
 @@ -53,7 +53,7 @@
      } while (0)
-
+ 
  void ca_get_device_list(struct ao *ao, struct ao_device_list *list);
 -#if HAVE_COREAUDIO || HAVE_AVFOUNDATION
 +#if HAVE_COREAUDIO
  OSStatus ca_select_device(struct ao *ao, char* name, AudioDeviceID *device);
  #endif
-
+ 
 @@ -71,7 +71,7 @@
  int64_t ca_frames_to_ns(struct ao *ao, uint32_t frames);
  int64_t ca_get_latency(const AudioTimeStamp *ts);
-
+ 
 -#if HAVE_COREAUDIO || HAVE_AVFOUNDATION
 +#if HAVE_COREAUDIO
  bool ca_stream_supports_compressed(struct ao *ao, AudioStreamID stream);
@@ -25,7 +25,7 @@ diff --git forkSrcPrefix/audio/out/ao_coreaudio_utils.c forkDstPrefix/audio/out/
 @@ -28,14 +28,14 @@
  #include "audio/format.h"
  #include "osdep/mac/compat.h"
-
+ 
 -#if HAVE_COREAUDIO || HAVE_AVFOUNDATION
 +#if HAVE_COREAUDIO
  #include "audio/out/ao_coreaudio_properties.h"
@@ -33,43 +33,68 @@ diff --git forkSrcPrefix/audio/out/ao_coreaudio_utils.c forkDstPrefix/audio/out/
  #else
  #include <mach/mach_time.h>
  #endif
-
+ 
 -#if HAVE_COREAUDIO || HAVE_AVFOUNDATION
 +#if HAVE_COREAUDIO
  static bool ca_is_output_device(struct ao *ao, AudioDeviceID dev)
  {
      size_t n_buffers;
 @@ -300,7 +300,7 @@
-
+ 
  int64_t ca_get_latency(const AudioTimeStamp *ts)
  {
 -#if HAVE_COREAUDIO || HAVE_AVFOUNDATION
 +#if HAVE_COREAUDIO
      uint64_t out = AudioConvertHostTimeToNanos(ts->mHostTime);
      uint64_t now = AudioConvertHostTimeToNanos(AudioGetCurrentHostTime());
-
+ 
 @@ -323,7 +323,7 @@
  #endif
  }
-
+ 
 -#if HAVE_COREAUDIO || HAVE_AVFOUNDATION
 +#if HAVE_COREAUDIO
  bool ca_stream_supports_compressed(struct ao *ao, AudioStreamID stream)
  {
      AudioStreamRangedDescription *formats = NULL;
+diff --git forkSrcPrefix/audio/out/ao_coreaudio_chmap.h forkDstPrefix/audio/out/ao_coreaudio_chmap.h
+--- forkSrcPrefix/audio/out/ao_coreaudio_chmap.h
++++ forkDstPrefix/audio/out/ao_coreaudio_chmap.h
+@@ -30,6 +30,8 @@
+ AudioChannelLayout *ca_find_standard_layout(void *talloc_ctx, AudioChannelLayout *l);
+ AudioChannelLayout *ca_get_acl(struct ao *ao, size_t *out_layout_size);
+ void ca_log_layout(struct ao *ao, int l, AudioChannelLayout *layout);
++#endif
++#if HAVE_COREAUDIO
+ bool ca_init_chmap(struct ao *ao, AudioDeviceID device);
+ void ca_get_active_chmap(struct ao *ao, AudioDeviceID device, int channel_count,
+                          struct mp_chmap *out_map);
+diff --git forkSrcPrefix/audio/out/ao_coreaudio_chmap.c forkDstPrefix/audio/out/ao_coreaudio_chmap.c
+--- forkSrcPrefix/audio/out/ao_coreaudio_chmap.c
++++ forkDstPrefix/audio/out/ao_coreaudio_chmap.c
+@@ -404,7 +404,9 @@
+     talloc_free(talloc_ctx);
+     return false;
+ }
++#endif
+ 
++#if HAVE_COREAUDIO
+ static AudioChannelLayout* ca_query_layout(struct ao *ao,
+                                            AudioDeviceID device,
+                                            void *talloc_ctx)
 diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
 --- forkSrcPrefix/audio/out/ao_avfoundation.m
 +++ forkDstPrefix/audio/out/ao_avfoundation.m
 @@ -249,9 +249,11 @@
          goto error;
      }
-
+ 
 +#if TARGET_OS_MAC && !TARGET_OS_IPHONE
      if (ao->device && ao->device[0]) {
          [p->renderer setAudioOutputDeviceUniqueID:(NSString*)cfstr_from_cstr(ao->device)];
      }
 +#endif
-
+ 
      [p->synchronizer addRenderer:p->renderer];
  #if HAVE_MACOS_11_3_FEATURES
 @@ -362,6 +364,8 @@

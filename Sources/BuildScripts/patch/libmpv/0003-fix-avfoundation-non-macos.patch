@@ -19,6 +19,7 @@ diff --git forkSrcPrefix/audio/out/ao_coreaudio_utils.h forkDstPrefix/audio/out/
  bool ca_stream_supports_compressed(struct ao *ao, AudioStreamID stream);
  OSStatus ca_lock_device(AudioDeviceID device, pid_t *pid);
  OSStatus ca_unlock_device(AudioDeviceID device, pid_t *pid);
+
 diff --git forkSrcPrefix/audio/out/ao_coreaudio_utils.c forkDstPrefix/audio/out/ao_coreaudio_utils.c
 --- forkSrcPrefix/audio/out/ao_coreaudio_utils.c
 +++ forkDstPrefix/audio/out/ao_coreaudio_utils.c
@@ -57,6 +58,7 @@ diff --git forkSrcPrefix/audio/out/ao_coreaudio_utils.c forkDstPrefix/audio/out/
  bool ca_stream_supports_compressed(struct ao *ao, AudioStreamID stream)
  {
      AudioStreamRangedDescription *formats = NULL;
+
 diff --git forkSrcPrefix/audio/out/ao_coreaudio_chmap.h forkDstPrefix/audio/out/ao_coreaudio_chmap.h
 --- forkSrcPrefix/audio/out/ao_coreaudio_chmap.h
 +++ forkDstPrefix/audio/out/ao_coreaudio_chmap.h
@@ -69,19 +71,62 @@ diff --git forkSrcPrefix/audio/out/ao_coreaudio_chmap.h forkDstPrefix/audio/out/
  bool ca_init_chmap(struct ao *ao, AudioDeviceID device);
  void ca_get_active_chmap(struct ao *ao, AudioDeviceID device, int channel_count,
                           struct mp_chmap *out_map);
+
 diff --git forkSrcPrefix/audio/out/ao_coreaudio_chmap.c forkDstPrefix/audio/out/ao_coreaudio_chmap.c
 --- forkSrcPrefix/audio/out/ao_coreaudio_chmap.c
 +++ forkDstPrefix/audio/out/ao_coreaudio_chmap.c
-@@ -404,7 +404,9 @@
-     talloc_free(talloc_ctx);
-     return false;
+@@ -337,7 +337,9 @@
+         *out_layout_size = layout_size;
+     return layout;
  }
 +#endif
  
 +#if HAVE_COREAUDIO
- static AudioChannelLayout* ca_query_layout(struct ao *ao,
-                                            AudioDeviceID device,
-                                            void *talloc_ctx)
+ 
+ #define CHMAP(n, ...) &(struct mp_chmap) MP_CONCAT(MP_CHMAP, n) (__VA_ARGS__)
+ 
+
+diff --git forkSrcPrefix/audio/out/ao_coreaudio_properties.h forkDstPrefix/audio/out/ao_coreaudio_properties.h
+--- forkSrcPrefix/audio/out/ao_coreaudio_properties.h
++++ forkDstPrefix/audio/out/ao_coreaudio_properties.h
+@@ -19,6 +19,10 @@
+ #ifndef MPV_COREAUDIO_PROPERTIES_H
+ #define MPV_COREAUDIO_PROPERTIES_H
+ 
++#include "config.h"
++
++#if HAVE_COREAUDIO
++
+ #include <AudioToolbox/AudioToolbox.h>
+ 
+ #include "internal.h"
+@@ -58,4 +62,5 @@
+ 
+ #define CA_SETTABLE(id, sel, data) ca_settable(id, CA_GLOBAL, sel, data)
+ 
++#endif /* HAVE_COREAUDIO */
+ #endif /* MPV_COREAUDIO_PROPERTIES_H */
+
+diff --git forkSrcPrefix/audio/out/ao_coreaudio_properties.c forkDstPrefix/audio/out/ao_coreaudio_properties.c
+--- forkSrcPrefix/audio/out/ao_coreaudio_properties.c
++++ forkDstPrefix/audio/out/ao_coreaudio_properties.c
+@@ -19,6 +19,10 @@
+  * Abstractions on the CoreAudio API to make property setting/getting suck less
+ */
+ 
++#include "config.h"
++
++#if HAVE_COREAUDIO
++
+ #include "audio/out/ao_coreaudio_properties.h"
+ #include "audio/out/ao_coreaudio_utils.h"
+ #include "mpv_talloc.h"
+@@ -101,3 +105,4 @@
+ 
+     return AudioObjectIsPropertySettable(id, &p_addr, data);
+ }
++#endif /* HAVE_COREAUDIO */
+
 diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
 --- forkSrcPrefix/audio/out/ao_avfoundation.m
 +++ forkDstPrefix/audio/out/ao_avfoundation.m

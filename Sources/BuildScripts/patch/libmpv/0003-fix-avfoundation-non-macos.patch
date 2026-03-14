@@ -163,14 +163,13 @@ diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_
 diff --git forkSrcPrefix/meson.build forkDstPrefix/meson.build
 --- forkSrcPrefix/meson.build
 +++ forkDstPrefix/meson.build
-@@ -419,6 +419,10 @@
-                      'osdep/mac/app_bridge.m',
-                      'player/clipboard/clipboard-mac.m')
-     main_fn_source = files('osdep/main-fn-mac.c')
-+endif
-+
-+if features['avfoundation'] and not features['cocoa']
-+    sources += files('osdep/utils-mac.c')
+@@ -821,6 +821,9 @@
+ if features['avfoundation']
+     dependencies += avfoundation
+     sources += files('audio/out/ao_avfoundation.m')
++    if not features['cocoa']
++        sources += files('osdep/utils-mac.c')
++    endif
  endif
  
- if posix
+ coreaudio = dependency('appleframeworks', modules: ['CoreFoundation', 'CoreAudio',

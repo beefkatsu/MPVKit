@@ -1,0 +1,66 @@
+diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
+--- forkSrcPrefix/audio/out/ao_avfoundation.m
++++ forkDstPrefix/audio/out/ao_avfoundation.m
+@@ -45,6 +45,11 @@
+     CMAudioFormatDescriptionRef format_description;
+     AVObserver *observer;
+     int64_t end_time_av;
++    // Rate priming: on high-latency routes (AirPlay ~2s) the timebase must
++    // not start until ~outputLatency of audio is queued in the renderer,
++    // otherwise playback enters a persistent underrun/desync loop.
++    bool rate_engaged;
++    int64_t prime_ns;
+ };
+ 
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+@@ -79,6 +84,10 @@
+     bool eof;
+     int real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
+     if (eof) {
++        if (!p->rate_engaged) {
++            p->rate_engaged = true;
++            [p->synchronizer setRate:1];
++        }
+         [p->renderer stopRequestingMediaData];
+         ao_stop_streaming(ao);
+     }
+@@ -129,6 +138,11 @@
+ 
+     time_delta = CMTimeGetNanoseconds(CMTimeMake(real_sample_count, samplerate));
+     p->end_time_av = end_time_av + time_delta;
++
++    if (!p->rate_engaged && p->end_time_av - cur_time_av >= p->prime_ns) {
++        p->rate_engaged = true;
++        [p->synchronizer setRate:1];
++    }
+ 
+     goto finish;
+ 
+@@ -145,7 +159,17 @@
+     struct priv *p = ao->priv;
+ 
+     p->end_time_av = -1;
+-    [p->synchronizer setRate:1];
++    p->rate_engaged = false;
++    p->prime_ns = 0;
++#if TARGET_OS_IPHONE
++    p->prime_ns = (int64_t)(AVAudioSession.sharedInstance.outputLatency * 1e9);
++    if (p->prime_ns > 0)
++        p->prime_ns += 250000000; // margin over the route's reported latency
++#endif
++    if (p->prime_ns <= 0) {
++        p->rate_engaged = true;
++        [p->synchronizer setRate:1];
++    }
+     [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
+         feed(ao);
+     }];
+@@ -168,7 +192,7 @@
+ 
+     if (paused) {
+         [p->synchronizer setRate:0];
+-    } else {
++    } else if (p->rate_engaged) {
+         [p->synchronizer setRate:1];
+     }
+ 

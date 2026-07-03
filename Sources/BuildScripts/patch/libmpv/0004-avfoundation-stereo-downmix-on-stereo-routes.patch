@@ -1,0 +1,19 @@
+diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
+--- forkSrcPrefix/audio/out/ao_avfoundation.m
++++ forkDstPrefix/audio/out/ao_avfoundation.m
+@@ -228,6 +228,15 @@
+     [instance setMode:AVAudioSessionModeMoviePlayback error:nil];
+     [instance setActive:YES error:nil];
+     [instance setPreferredOutputNumberOfChannels:prefChannels error:nil];
++
++    // AVSampleBufferAudioRenderer does not reliably downmix multichannel
++    // PCM on stereo output routes: on AirPlay, channels beyond L/R are
++    // dropped, losing dialogue (center channel). Match ao_audiounit and
++    // request stereo so the mpv core downmixes in software.
++    if (instance.outputNumberOfChannels <= 2 && ao->channels.num > 2) {
++        ao->channels = (struct mp_chmap)MP_CHMAP_INIT_STEREO;
++        MP_VERBOSE(ao, "stereo output route, requesting stereo downmix\n");
++    }
+ #endif
+ 
+     if ((p->renderer = [[AVSampleBufferAudioRenderer alloc] init]) == nil) {

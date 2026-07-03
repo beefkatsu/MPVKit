@@ -1,0 +1,123 @@
+diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
+--- forkSrcPrefix/audio/out/ao_avfoundation.m
++++ forkDstPrefix/audio/out/ao_avfoundation.m
+@@ -50,6 +50,18 @@
+     // otherwise playback enters a persistent underrun/desync loop.
+     bool rate_engaged;
+     int64_t prime_ns;
++    // Cold-start handling: queued media fills much faster than wall time
++    // (decode outruns realtime), but the AirPlay connection handshake
++    // needs wall-clock seconds. The first start waits for both conditions;
++    // warm restarts (seeks, route changes) only need the queue condition.
++    // The renderer stops requesting media once its queue is full, so the
++    // wall condition is re-checked via a cancelable dispatch block, not
++    // the next feed() call.
++    bool primed_once;
++    bool paused;
++    int64_t start_time_mp;
++    int64_t wall_ns;
++    dispatch_block_t engage_block;
+ };
+ 
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+@@ -63,6 +75,23 @@
+     return CMTimeMake(time, 1000000000);
+ }
+ 
++static void engage_rate(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    p->rate_engaged = true;
++    p->primed_once = true;
++    [p->synchronizer setRate:1];
++}
++
++static void cancel_pending_engage(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    if (p->engage_block) {
++        dispatch_block_cancel(p->engage_block);
++        p->engage_block = NULL;
++    }
++}
++
+ static void feed(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+@@ -84,10 +113,8 @@
+     bool eof;
+     int real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
+     if (eof) {
+-        if (!p->rate_engaged) {
+-            p->rate_engaged = true;
+-            [p->synchronizer setRate:1];
+-        }
++        if (!p->rate_engaged && !p->paused)
++            engage_rate(ao);
+         [p->renderer stopRequestingMediaData];
+         ao_stop_streaming(ao);
+     }
+@@ -139,9 +166,23 @@
+     time_delta = CMTimeGetNanoseconds(CMTimeMake(real_sample_count, samplerate));
+     p->end_time_av = end_time_av + time_delta;
+ 
+-    if (!p->rate_engaged && p->end_time_av - cur_time_av >= p->prime_ns) {
+-        p->rate_engaged = true;
+-        [p->synchronizer setRate:1];
++    if (!p->rate_engaged && !p->paused &&
++        p->end_time_av - cur_time_av >= p->prime_ns)
++    {
++        int64_t wall_remaining = p->wall_ns - (mp_time_ns() - p->start_time_mp);
++        if (wall_remaining <= 0) {
++            engage_rate(ao);
++        } else if (!p->engage_block) {
++            dispatch_block_t blk = dispatch_block_create(0, ^{
++                struct priv *pp = ao->priv;
++                pp->engage_block = NULL;
++                if (!pp->rate_engaged && !pp->paused)
++                    engage_rate(ao);
++            });
++            p->engage_block = blk;
++            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, wall_remaining),
++                           p->queue, blk);
++        }
+     }
+ 
+     goto finish;
+@@ -166,6 +207,9 @@
+     if (p->prime_ns > 0)
+         p->prime_ns += 250000000; // margin over the route's reported latency
+ #endif
++    p->paused = false;
++    p->start_time_mp = mp_time_ns();
++    p->wall_ns = (p->primed_once || p->prime_ns <= 0) ? 0 : p->prime_ns + 750000000;
+     if (p->prime_ns <= 0) {
+         p->rate_engaged = true;
+         [p->synchronizer setRate:1];
+@@ -180,6 +224,7 @@
+     struct priv *p = ao->priv;
+ 
+     dispatch_sync(p->queue, ^{
++        cancel_pending_engage(ao);
+         [p->renderer stopRequestingMediaData];
+         [p->renderer flush];
+         [p->synchronizer setRate:0];
+@@ -190,10 +235,18 @@
+ {
+     struct priv *p = ao->priv;
+ 
++    p->paused = paused;
+     if (paused) {
++        dispatch_sync(p->queue, ^{
++            cancel_pending_engage(ao);
++        });
+         [p->synchronizer setRate:0];
+     } else if (p->rate_engaged) {
+         [p->synchronizer setRate:1];
++    } else {
++        // Manual unpause during the cold-start window: the user-visible
++        // pause has already given the route its warm-up — engage now.
++        engage_rate(ao);
+     }
+ 
+     return true;

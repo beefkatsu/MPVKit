@@ -1,0 +1,76 @@
+diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
+--- forkSrcPrefix/audio/out/ao_avfoundation.m
++++ forkDstPrefix/audio/out/ao_avfoundation.m
+@@ -60,6 +60,12 @@
+     bool paused;
+     bool feeding_started;
+     dispatch_block_t hold_block;
++    // Demand cap: after any flush the renderer burst-refills its (empty)
++    // sink buffer with no upper bound, draining the demuxer cache at
++    // decode speed. Never queue more than cap_ns ahead of the timebase;
++    // when the cap is hit, feeding pauses briefly instead.
++    int64_t cap_ns;
++    dispatch_block_t throttle_block;
+ };
+ 
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+@@ -101,6 +107,10 @@
+         dispatch_block_cancel(p->hold_block);
+         p->hold_block = NULL;
+     }
++    if (p->throttle_block) {
++        dispatch_block_cancel(p->throttle_block);
++        p->throttle_block = NULL;
++    }
+ }
+ 
+ static void feed(struct ao *ao)
+@@ -120,6 +130,20 @@
+     int64_t cur_time_av = CMTimeGetNanoseconds([p->synchronizer currentTime]);
+     int64_t cur_time_mp = mp_time_ns();
+     int64_t end_time_av = MPMAX(p->end_time_av, cur_time_av);
++
++    if (p->rate_engaged && p->cap_ns > 0 && end_time_av - cur_time_av > p->cap_ns) {
++        [p->renderer stopRequestingMediaData];
++        p->feeding_started = false;
++        dispatch_block_t blk = dispatch_block_create(0, ^{
++            struct priv *pp = ao->priv;
++            pp->throttle_block = NULL;
++            start_feeding(ao);
++        });
++        p->throttle_block = blk;
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250000000),
++                       p->queue, blk);
++        goto finish;
++    }
+     int64_t time_delta = CMTimeGetNanoseconds(CMTimeMake(request_sample_count, samplerate));
+     bool eof;
+     int real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
+@@ -205,14 +229,24 @@
+     if (p->prime_ns > 0)
+         p->prime_ns += 250000000; // margin over the route's reported latency
+ #endif
++    p->cap_ns = p->prime_ns > 0 ? p->prime_ns + 2000000000 : 0;
+     if (p->prime_ns <= 0) {
+         p->rate_engaged = true;
+         [p->synchronizer setRate:1];
+         start_feeding(ao);
+     } else if (p->primed_once) {
+-        // Warm restart: route is live, backpressure works. feed() engages
+-        // the rate once prime_ns worth of audio is queued.
+-        start_feeding(ao);
++        // Warm restart (seek, route change): the route is live, but stop()
++        // just flushed the sink buffer and the seek invalidated the demuxer
++        // cache — give the cache a short grace period before the renderer's
++        // refill burst. feed() engages the rate once primed.
++        dispatch_block_t blk = dispatch_block_create(0, ^{
++            struct priv *pp = ao->priv;
++            pp->hold_block = NULL;
++            start_feeding(ao);
++        });
++        p->hold_block = blk;
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500000000),
++                       p->queue, blk);
+     } else {
+         // Cold start: hold feeding until the route handshake settles.
+         dispatch_block_t blk = dispatch_block_create(0, ^{

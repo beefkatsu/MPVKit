@@ -1,0 +1,148 @@
+diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
+--- forkSrcPrefix/audio/out/ao_avfoundation.m
++++ forkDstPrefix/audio/out/ao_avfoundation.m
+@@ -50,6 +50,16 @@
+     // otherwise playback enters a persistent underrun/desync loop.
+     bool rate_engaged;
+     int64_t prime_ns;
++    // Cold-start hold: while the AirPlay connection handshake runs, the
++    // renderer swallows enqueued audio with NO backpressure (the route is
++    // not live yet) — feeding during this window drains the demuxer cache
++    // at decode speed and playback enters a paused-for-cache death spiral.
++    // On the first start, feeding itself is held for a wall-clock window;
++    // warm restarts (seeks, route changes) feed immediately.
++    bool primed_once;
++    bool paused;
++    bool feeding_started;
++    dispatch_block_t hold_block;
+ };
+ 
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+@@ -63,6 +73,36 @@
+     return CMTimeMake(time, 1000000000);
+ }
+ 
++static void engage_rate(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    p->rate_engaged = true;
++    p->primed_once = true;
++    [p->synchronizer setRate:1];
++}
++
++static void feed(struct ao *ao);
++
++static void start_feeding(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    if (p->feeding_started)
++        return;
++    p->feeding_started = true;
++    [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
++        feed(ao);
++    }];
++}
++
++static void cancel_hold(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    if (p->hold_block) {
++        dispatch_block_cancel(p->hold_block);
++        p->hold_block = NULL;
++    }
++}
++
+ static void feed(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+@@ -84,10 +124,8 @@
+     bool eof;
+     int real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
+     if (eof) {
+-        if (!p->rate_engaged) {
+-            p->rate_engaged = true;
+-            [p->synchronizer setRate:1];
+-        }
++        if (!p->rate_engaged && !p->paused)
++            engage_rate(ao);
+         [p->renderer stopRequestingMediaData];
+         ao_stop_streaming(ao);
+     }
+@@ -139,10 +177,9 @@
+     time_delta = CMTimeGetNanoseconds(CMTimeMake(real_sample_count, samplerate));
+     p->end_time_av = end_time_av + time_delta;
+ 
+-    if (!p->rate_engaged && p->end_time_av - cur_time_av >= p->prime_ns) {
+-        p->rate_engaged = true;
+-        [p->synchronizer setRate:1];
+-    }
++    if (!p->rate_engaged && !p->paused &&
++        p->end_time_av - cur_time_av >= p->prime_ns)
++        engage_rate(ao);
+ 
+     goto finish;
+ 
+@@ -160,6 +197,8 @@
+ 
+     p->end_time_av = -1;
+     p->rate_engaged = false;
++    p->feeding_started = false;
++    p->paused = false;
+     p->prime_ns = 0;
+ #if TARGET_OS_IPHONE
+     p->prime_ns = (int64_t)(AVAudioSession.sharedInstance.outputLatency * 1e9);
+@@ -169,10 +208,22 @@
+     if (p->prime_ns <= 0) {
+         p->rate_engaged = true;
+         [p->synchronizer setRate:1];
++        start_feeding(ao);
++    } else if (p->primed_once) {
++        // Warm restart: route is live, backpressure works. feed() engages
++        // the rate once prime_ns worth of audio is queued.
++        start_feeding(ao);
++    } else {
++        // Cold start: hold feeding until the route handshake settles.
++        dispatch_block_t blk = dispatch_block_create(0, ^{
++            struct priv *pp = ao->priv;
++            pp->hold_block = NULL;
++            start_feeding(ao);
++        });
++        p->hold_block = blk;
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, p->prime_ns + 1000000000),
++                       p->queue, blk);
+     }
+-    [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
+-        feed(ao);
+-    }];
+ }
+ 
+ static void stop(struct ao *ao)
+@@ -180,6 +231,7 @@
+     struct priv *p = ao->priv;
+ 
+     dispatch_sync(p->queue, ^{
++        cancel_hold(ao);
+         [p->renderer stopRequestingMediaData];
+         [p->renderer flush];
+         [p->synchronizer setRate:0];
+@@ -190,10 +242,18 @@
+ {
+     struct priv *p = ao->priv;
+ 
++    p->paused = paused;
+     if (paused) {
++        dispatch_sync(p->queue, ^{
++            cancel_hold(ao);
++        });
+         [p->synchronizer setRate:0];
+-    } else if (p->rate_engaged) {
+-        [p->synchronizer setRate:1];
++    } else {
++        // Unpause always releases a cold-start hold: the user-visible pause
++        // has already given the route its warm-up.
++        start_feeding(ao);
++        if (p->rate_engaged)
++            [p->synchronizer setRate:1];
+     }
+ 
+     return true;

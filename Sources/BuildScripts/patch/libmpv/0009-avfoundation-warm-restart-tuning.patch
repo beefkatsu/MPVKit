@@ -1,0 +1,40 @@
+diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
+--- forkSrcPrefix/audio/out/ao_avfoundation.m
++++ forkDstPrefix/audio/out/ao_avfoundation.m
+@@ -66,6 +66,10 @@
+     // when the cap is hit, feeding pauses briefly instead.
+     int64_t cap_ns;
+     dispatch_block_t throttle_block;
++    // Rate-engage threshold: full prime_ns on cold start; halved on warm
++    // restarts (the sink was recently full and the route is live) to
++    // shrink the window in which video runs ahead of the frozen clock.
++    int64_t engage_ns;
+ };
+ 
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+@@ -202,7 +206,7 @@
+     p->end_time_av = end_time_av + time_delta;
+ 
+     if (!p->rate_engaged && !p->paused &&
+-        p->end_time_av - cur_time_av >= p->prime_ns)
++        p->end_time_av - cur_time_av >= p->engage_ns)
+         engage_rate(ao);
+ 
+     goto finish;
+@@ -230,6 +234,7 @@
+         p->prime_ns += 250000000; // margin over the route's reported latency
+ #endif
+     p->cap_ns = p->prime_ns > 0 ? p->prime_ns + 2000000000 : 0;
++    p->engage_ns = p->primed_once ? p->prime_ns / 2 : p->prime_ns;
+     if (p->prime_ns <= 0) {
+         p->rate_engaged = true;
+         [p->synchronizer setRate:1];
+@@ -245,7 +250,7 @@
+             start_feeding(ao);
+         });
+         p->hold_block = blk;
+-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500000000),
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250000000),
+                        p->queue, blk);
+     } else {
+         // Cold start: hold feeding until the route handshake settles.

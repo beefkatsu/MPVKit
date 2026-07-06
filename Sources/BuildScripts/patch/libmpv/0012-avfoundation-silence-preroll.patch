@@ -1,0 +1,42 @@
+diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
+--- forkSrcPrefix/audio/out/ao_avfoundation.m
++++ forkDstPrefix/audio/out/ao_avfoundation.m
+@@ -70,6 +70,12 @@
+     // restarts (the sink was recently full and the route is live) to
+     // shrink the window in which video runs ahead of the frozen clock.
+     int64_t engage_ns;
++    // Silence preroll: the synchronizer timebase halts ~0.4s at the first
++    // rendered audio after every rate start (AirPlay sink alignment; no
++    // mpv-side events). Rendering driver-injected silence first lets the
++    // halt land where nothing is audible and no content clock is running —
++    // content then starts continuously. Counted in samples still to inject.
++    int64_t preroll_samples;
+ };
+ 
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+@@ -149,8 +155,15 @@
+         goto finish;
+     }
+     int64_t time_delta = CMTimeGetNanoseconds(CMTimeMake(request_sample_count, samplerate));
+-    bool eof;
+-    int real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
++    bool eof = false;
++    int real_sample_count;
++    if (p->preroll_samples > 0) {
++        real_sample_count = (int)MPMIN((int64_t)request_sample_count, p->preroll_samples);
++        memset(data[0], 0, (size_t)real_sample_count * sstride);
++        p->preroll_samples -= real_sample_count;
++    } else {
++        real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
++    }
+     if (eof) {
+         if (!p->rate_engaged && !p->paused)
+             engage_rate(ao);
+@@ -239,6 +252,7 @@
+     // immediately; engaging with less queued runs mpv dry (underrun +
+     // ~0.4s rebuffer stall right after every start).
+     p->engage_ns = p->prime_ns > 0 ? p->prime_ns + 250000000 : 0;
++    p->preroll_samples = p->prime_ns > 0 ? ao->samplerate : 0; // 1s of silence
+     if (p->prime_ns <= 0) {
+         p->rate_engaged = true;
+         [p->synchronizer setRate:1];

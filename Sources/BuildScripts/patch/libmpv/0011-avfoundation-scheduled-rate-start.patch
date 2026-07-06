@@ -1,0 +1,26 @@
+diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
+--- forkSrcPrefix/audio/out/ao_avfoundation.m
++++ forkDstPrefix/audio/out/ao_avfoundation.m
+@@ -88,6 +88,22 @@
+     struct priv *p = ao->priv;
+     p->rate_engaged = true;
+     p->primed_once = true;
++#if TARGET_OS_IPHONE
++    // Starting the rate immediately makes the synchronizer timebase halt
++    // for ~0.4-0.5s shortly after start on AirPlay routes while it
++    // re-aligns to the sink's real playout position (observed as a
++    // mid-start freeze with no mpv-side events — the derived audio clock
++    // simply stops). Schedule the start at a future host time instead so
++    // the pipeline aligns before the clock runs.
++    if (p->prime_ns > 0) {
++        if (@available(tvOS 14.5, iOS 14.5, *)) {
++            CMTime host = CMTimeAdd(CMClockGetTime(CMClockGetHostTimeClock()),
++                                    CMTimeMake(750, 1000));
++            [p->synchronizer setRate:1 time:kCMTimeInvalid atHostTime:host];
++            return;
++        }
++    }
++#endif
+     [p->synchronizer setRate:1];
+ }
+ 

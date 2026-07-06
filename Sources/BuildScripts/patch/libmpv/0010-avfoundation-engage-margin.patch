@@ -1,0 +1,16 @@
+diff --git forkSrcPrefix/audio/out/ao_avfoundation.m forkDstPrefix/audio/out/ao_avfoundation.m
+--- forkSrcPrefix/audio/out/ao_avfoundation.m
++++ forkDstPrefix/audio/out/ao_avfoundation.m
+@@ -234,7 +234,11 @@
+         p->prime_ns += 250000000; // margin over the route's reported latency
+ #endif
+     p->cap_ns = p->prime_ns > 0 ? p->prime_ns + 2000000000 : 0;
+-    p->engage_ns = p->primed_once ? p->prime_ns / 2 : p->prime_ns;
++    // Engage only once the queue can survive the sink's initial draw:
++    // at rate start the AirPlay pipe swallows ~outputLatency of audio
++    // immediately; engaging with less queued runs mpv dry (underrun +
++    // ~0.4s rebuffer stall right after every start).
++    p->engage_ns = p->prime_ns > 0 ? p->prime_ns + 250000000 : 0;
+     if (p->prime_ns <= 0) {
+         p->rate_engaged = true;
+         [p->synchronizer setRate:1];

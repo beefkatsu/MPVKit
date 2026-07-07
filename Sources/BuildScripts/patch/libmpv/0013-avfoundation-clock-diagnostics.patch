@@ -1,0 +1,141 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 1ec6883..b10a375 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -76,6 +76,9 @@ - (void)handleRestartNotification:(NSNotification*)notification;
+     // halt land where nothing is audible and no content clock is running —
+     // content then starts continuously. Counted in samples still to inject.
+     int64_t preroll_samples;
++    // Clock diagnostics (diag build only).
++    int64_t diag_last_ns;
++    int64_t diag_burst_until_ns;
+ };
+ 
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+@@ -89,12 +92,52 @@ static CMTime CMTimeFromNanoseconds(int64_t time)
+     return CMTimeMake(time, 1000000000);
+ }
+ 
++// Clock diagnostics (temporary, diag build only): the resume-from-pause
++// clock rewind is invisible to every mpv property — it lives between the
++// synchronizer timebase, the renderer queue, and the core's wall-clock
++// pause bookkeeping. Print all three at every transition; full-rate for
++// 4s after unpause/engage (the wobble window), 1/s otherwise.
++static void diag(struct ao *ao, const char *tag, int n)
++{
++    struct priv *p = ao->priv;
++    int64_t tb = CMTimeGetNanoseconds([p->synchronizer currentTime]);
++    MP_WARN(ao, "[clockdiag] %s tb=%.3f end=%.3f q=%.3f rate=%.2f wall=%.3f eng=%d paused=%d n=%d\n",
++            tag,
++            tb / 1e9,
++            p->end_time_av / 1e9,
++            (p->end_time_av - tb) / 1e9,
++            (double)[p->synchronizer rate],
++            mp_time_ns() / 1e9,
++            p->rate_engaged ? 1 : 0,
++            p->paused ? 1 : 0,
++            n);
++}
++
++static void diag_burst(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    p->diag_burst_until_ns = mp_time_ns() + 4000000000;
++}
++
++static bool diag_should_log(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    int64_t now = mp_time_ns();
++    if (now < p->diag_burst_until_ns || now - p->diag_last_ns >= 1000000000) {
++        p->diag_last_ns = now;
++        return true;
++    }
++    return false;
++}
++
+ static void engage_rate(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+     p->rate_engaged = true;
+     p->primed_once = true;
+     [p->synchronizer setRate:1];
++    diag_burst(ao);
++    diag(ao, "engage", -1);
+ }
+ 
+ static void feed(struct ao *ao);
+@@ -142,6 +185,8 @@ static void feed(struct ao *ao)
+     int64_t end_time_av = MPMAX(p->end_time_av, cur_time_av);
+ 
+     if (p->rate_engaged && p->cap_ns > 0 && end_time_av - cur_time_av > p->cap_ns) {
++        if (diag_should_log(ao))
++            diag(ao, "capped", 0);
+         [p->renderer stopRequestingMediaData];
+         p->feeding_started = false;
+         dispatch_block_t blk = dispatch_block_create(0, ^{
+@@ -165,12 +210,15 @@ static void feed(struct ao *ao)
+         real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
+     }
+     if (eof) {
++        diag(ao, "eof", real_sample_count);
+         if (!p->rate_engaged && !p->paused)
+             engage_rate(ao);
+         [p->renderer stopRequestingMediaData];
+         ao_stop_streaming(ao);
+     }
+     if (real_sample_count == 0) {
++        if (diag_should_log(ao))
++            diag(ao, "empty", 0);
+         goto finish;
+     }
+ 
+@@ -218,6 +266,9 @@ static void feed(struct ao *ao)
+     time_delta = CMTimeGetNanoseconds(CMTimeMake(real_sample_count, samplerate));
+     p->end_time_av = end_time_av + time_delta;
+ 
++    if (diag_should_log(ao))
++        diag(ao, p->preroll_samples > 0 ? "preroll" : "feed", real_sample_count);
++
+     if (!p->rate_engaged && !p->paused &&
+         p->end_time_av - cur_time_av >= p->engage_ns)
+         engage_rate(ao);
+@@ -253,6 +304,11 @@ static void start(struct ao *ao)
+     // ~0.4s rebuffer stall right after every start).
+     p->engage_ns = p->prime_ns > 0 ? p->prime_ns + 250000000 : 0;
+     p->preroll_samples = p->prime_ns > 0 ? ao->samplerate : 0; // 1s of silence
++    MP_WARN(ao, "[clockdiag] start prime=%.3f engage=%.3f cap=%.3f preroll=%.2fs warm=%d\n",
++            p->prime_ns / 1e9, p->engage_ns / 1e9, p->cap_ns / 1e9,
++            p->preroll_samples / (double)ao->samplerate, p->primed_once ? 1 : 0);
++    diag_burst(ao);
++    diag(ao, "start", -1);
+     if (p->prime_ns <= 0) {
+         p->rate_engaged = true;
+         [p->synchronizer setRate:1];
+@@ -287,6 +343,7 @@ static void stop(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+ 
++    diag(ao, "stop", -1);
+     dispatch_sync(p->queue, ^{
+         cancel_hold(ao);
+         [p->renderer stopRequestingMediaData];
+@@ -304,13 +361,18 @@ static bool set_pause(struct ao *ao, bool paused)
+         dispatch_sync(p->queue, ^{
+             cancel_hold(ao);
+         });
++        diag(ao, "pause-pre", -1);
+         [p->synchronizer setRate:0];
++        diag(ao, "pause-post", -1);
+     } else {
+         // Unpause always releases a cold-start hold: the user-visible pause
+         // has already given the route its warm-up.
++        diag(ao, "unpause-pre", -1);
+         start_feeding(ao);
+         if (p->rate_engaged)
+             [p->synchronizer setRate:1];
++        diag_burst(ao);
++        diag(ao, "unpause-post", -1);
+     }
+ 
+     return true;

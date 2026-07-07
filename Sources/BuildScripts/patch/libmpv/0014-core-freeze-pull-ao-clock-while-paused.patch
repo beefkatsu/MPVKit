@@ -1,0 +1,37 @@
+diff --git a/audio/out/buffer.c b/audio/out/buffer.c
+index 277b524..12130b5 100644
+--- a/audio/out/buffer.c
++++ b/audio/out/buffer.c
+@@ -306,7 +306,17 @@ double ao_get_delay(struct ao *ao)
+     } else {
+         int64_t end = p->end_time_ns;
+         int64_t now = mp_time_ns();
+-        driver_delay = MPMAX(0, MP_TIME_NS_TO_S(end - now));
++        // While hw-paused, end_time_ns is a frozen wall-clock timestamp but
++        // the wall clock keeps running: the computed delay shrinks for the
++        // whole pause, so the reported audio pts creeps forward at real-time
++        // speed and snaps back by the full pause duration on unpause (video
++        // visibly steps forward/backward around every unpause on AOs with
++        // large device buffers). Freeze the delay at its pause-time snapshot
++        // instead — the pull-AO equivalent of prepause_state above.
++        if (p->paused && p->hw_paused)
++            driver_delay = MPMAX(0, MP_TIME_NS_TO_S(p->queued_time_ns));
++        else
++            driver_delay = MPMAX(0, MP_TIME_NS_TO_S(end - now));
+     }
+ 
+     int64_t pending = mp_async_queue_get_samples(p->queue);
+@@ -438,8 +448,12 @@ void ao_set_paused(struct ao *ao, bool paused, bool eof)
+     if (do_change_state) {
+         if (is_hw_paused) {
+             if (paused) {
+-                ao->driver->set_pause(ao, true);
++                // Snapshot before the driver call: ao_get_delay() reads
++                // queued_time_ns as soon as p->paused is set, and a slow
++                // driver pause (dispatch_sync etc.) would leave it stale
++                // from the previous pause for that window.
+                 p->queued_time_ns = p->end_time_ns - mp_time_ns();
++                ao->driver->set_pause(ao, true);
+             } else {
+                 p->end_time_ns = p->queued_time_ns + mp_time_ns();
+                 ao->driver->set_pause(ao, false);

@@ -1,5 +1,5 @@
 diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
-index 93079e6..824a6e1 100644
+index 93079e6..000930b 100644
 --- a/audio/out/ao_avfoundation.m
 +++ b/audio/out/ao_avfoundation.m
 @@ -36,6 +36,7 @@ @interface AVObserver : NSObject {
@@ -38,7 +38,7 @@ index 93079e6..824a6e1 100644
      [p->synchronizer setRate:1];
      diag_burst(ao);
      diag(ao, "engage", -1);
-@@ -240,6 +255,21 @@ static void feed(struct ao *ao)
+@@ -240,6 +255,20 @@ static void feed(struct ao *ao)
      int64_t cur_time_mp = mp_time_ns();
      int64_t end_time_av = MPMAX(p->end_time_av, cur_time_av);
  
@@ -48,8 +48,7 @@ index 93079e6..824a6e1 100644
 +        } else if (cur_time_mp - p->engage_wall_ns > 1500000000) {
 +            // rate=1 for 1.5s and the timebase never moved (longest healthy
 +            // engage→tick gap on device is ~0.5s): wedged zombie session.
-+            MP_WARN(ao, "[clockdiag] timebase dead %.1fs after engage; rebuilding audio output
-+",
++            MP_WARN(ao, "[clockdiag] timebase dead %.1fs after engage; rebuilding audio output\n",
 +                    (cur_time_mp - p->engage_wall_ns) / 1e9);
 +            p->engage_verified = true; // one-shot until the next engage
 +            ao_request_reload(ao);
@@ -60,7 +59,7 @@ index 93079e6..824a6e1 100644
      // Resume settle: withhold reads until the sink re-anchors (tb steps
      // back), starts consuming normally (tb advances), or the window times
      // out — the renderer plays from its intact queue meanwhile.
-@@ -556,6 +586,25 @@ - (instancetype)initWithAO:(struct ao*)_ao {
+@@ -556,6 +585,24 @@ - (instancetype)initWithAO:(struct ao*)_ao {
      }
      return self;
  }
@@ -77,8 +76,7 @@ index 93079e6..824a6e1 100644
 +    // via the renderer notifications below.
 +    NSNumber *reason = notification.userInfo[AVAudioSessionRouteChangeReasonKey];
 +    if (reason && reason.unsignedIntegerValue == AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
-+        MP_WARN(ao, "active output lost (dirty route change); rebuilding audio output
-+");
++        MP_WARN(ao, "active output lost (dirty route change); rebuilding audio output\n");
 +        ao_request_reload(ao);
 +    }
 +#endif
@@ -86,7 +84,7 @@ index 93079e6..824a6e1 100644
  - (void)handleRestartNotification:(NSNotification*)notification {
      char *name = cfstr_get_cstr((CFStringRef)notification.name);
      MP_WARN(ao, "restarting due to system notification; this will cause desync\n");
-@@ -671,6 +720,9 @@ static int init(struct ao *ao)
+@@ -671,6 +718,9 @@ static int init(struct ao *ao)
      }
  #endif
      [center addObserver:p->observer selector:@selector(handleRestartNotification:) name:AVSampleBufferAudioRendererWasFlushedAutomaticallyNotification object:p->renderer];

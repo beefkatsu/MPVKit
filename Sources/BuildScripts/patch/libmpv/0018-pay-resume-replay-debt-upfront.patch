@@ -1,0 +1,145 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index a986250..a844550 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -76,6 +76,15 @@ - (void)handleRestartNotification:(NSNotification*)notification;
+     // halt land where nothing is audible and no content clock is running —
+     // content then starts continuously. Counted in samples still to inject.
+     int64_t preroll_samples;
++    // Resume settle: after a rate restart on a high-latency route the sink
++    // re-anchors its timebase backward (re-sending the in-flight audio the
++    // pause discarded). Reads are withheld until the re-anchor is observed
++    // — with the core clock frozen (resume_thaw_pending), the first read
++    // then anchors timing at post-replay truth and the replay debt is paid
++    // as one short up-front hold instead of a mid-play freeze.
++    int64_t resume_settle_until;
++    int64_t resume_settle_tb;
++    bool resume_settle_refresh;
+     // Clock diagnostics (diag build only).
+     int64_t diag_last_ns;
+     int64_t diag_burst_until_ns;
+@@ -184,7 +193,24 @@ static void feed(struct ao *ao)
+     int64_t cur_time_mp = mp_time_ns();
+     int64_t end_time_av = MPMAX(p->end_time_av, cur_time_av);
+ 
+-    if (p->rate_engaged && p->cap_ns > 0 && end_time_av - cur_time_av > p->cap_ns) {
++    // Resume settle: withhold reads until the sink re-anchors (tb steps
++    // back), starts consuming normally (tb advances), or the window times
++    // out — the renderer plays from its intact queue meanwhile.
++    if (p->resume_settle_until) {
++        if (cur_time_av < p->resume_settle_tb - 50000000 ||
++            cur_time_av > p->resume_settle_tb + 100000000 ||
++            cur_time_mp > p->resume_settle_until) {
++            p->resume_settle_until = 0;
++            p->resume_settle_refresh = true; // one cap-bypass read anchors truth
++            MP_WARN(ao, "[clockdiag] settle-done tb=%.3f (armed at %.3f)\n",
++                    cur_time_av / 1e9, p->resume_settle_tb / 1e9);
++        } else {
++            goto finish;
++        }
++    }
++
++    if (!p->resume_settle_refresh &&
++        p->rate_engaged && p->cap_ns > 0 && end_time_av - cur_time_av > p->cap_ns) {
+         if (diag_should_log(ao))
+             diag(ao, "capped", 0);
+         [p->renderer stopRequestingMediaData];
+@@ -262,6 +288,7 @@ static void feed(struct ao *ao)
+     }
+ 
+     [p->renderer enqueueSampleBuffer:sample_buffer];
++    p->resume_settle_refresh = false;
+ 
+     time_delta = CMTimeGetNanoseconds(CMTimeMake(real_sample_count, samplerate));
+     p->end_time_av = end_time_av + time_delta;
+@@ -291,6 +318,8 @@ static void start(struct ao *ao)
+     p->rate_engaged = false;
+     p->feeding_started = false;
+     p->paused = false;
++    p->resume_settle_until = 0;
++    p->resume_settle_refresh = false;
+     p->prime_ns = 0;
+ #if TARGET_OS_IPHONE
+     p->prime_ns = (int64_t)(AVAudioSession.sharedInstance.outputLatency * 1e9);
+@@ -385,6 +414,8 @@ static bool set_pause(struct ao *ao, bool paused)
+         dispatch_sync(p->queue, ^{
+             cancel_hold(ao);
+         });
++        p->resume_settle_until = 0;
++        p->resume_settle_refresh = false;
+         diag(ao, "pause-pre", -1);
+         [p->synchronizer setRate:0];
+         diag(ao, "pause-post", -1);
+@@ -392,6 +423,13 @@ static bool set_pause(struct ao *ao, bool paused)
+         // Unpause always releases a cold-start hold: the user-visible pause
+         // has already given the route its warm-up.
+         diag(ao, "unpause-pre", -1);
++        // High-latency routes: arm the resume settle before feeding starts
++        // (see struct comment) — the core holds its clock frozen until the
++        // first read we allow through.
++        if (p->prime_ns >= 750000000) {
++            p->resume_settle_tb = CMTimeGetNanoseconds([p->synchronizer currentTime]);
++            p->resume_settle_until = mp_time_ns() + 500000000;
++        }
+         start_feeding(ao);
+         if (p->rate_engaged)
+             [p->synchronizer setRate:1];
+diff --git a/audio/out/buffer.c b/audio/out/buffer.c
+index 12130b5..1053d41 100644
+--- a/audio/out/buffer.c
++++ b/audio/out/buffer.c
+@@ -62,6 +62,10 @@ struct buffer_state {
+     bool hw_paused;             // driver->set_pause() was used successfully
+ 
+     int64_t end_time_ns;        // absolute output time of last played sample
++    bool resume_thaw_pending;   // pull hw-unpause: keep the clock frozen at
++                                // its pause snapshot until the first real
++                                // read delivers fresh timing (the driver may
++                                // withhold reads while its sink settles)
+     int64_t queued_time_ns;     // duration of samples that have been queued to
+                                 // the device but have not been played.
+                                 // This field is only set in ao_set_paused(),
+@@ -183,8 +187,10 @@ static int ao_read_data_locked(struct ao *ao, void **data, int samples,
+ 
+     int pos = read_buffer(ao, data, samples, eof, pad_silence);
+ 
+-    if (pos > 0)
++    if (pos > 0) {
+         p->end_time_ns = out_time_ns;
++        p->resume_thaw_pending = false;
++    }
+ 
+     if (pos < samples && p->playing && !p->paused) {
+         p->playing = false;
+@@ -313,7 +319,7 @@ double ao_get_delay(struct ao *ao)
+         // visibly steps forward/backward around every unpause on AOs with
+         // large device buffers). Freeze the delay at its pause-time snapshot
+         // instead — the pull-AO equivalent of prepause_state above.
+-        if (p->paused && p->hw_paused)
++        if ((p->paused && p->hw_paused) || p->resume_thaw_pending)
+             driver_delay = MPMAX(0, MP_TIME_NS_TO_S(p->queued_time_ns));
+         else
+             driver_delay = MPMAX(0, MP_TIME_NS_TO_S(end - now));
+@@ -355,6 +361,7 @@ void ao_reset(struct ao *ao)
+     p->playing = false;
+     p->recover_pause = false;
+     p->hw_paused = false;
++    p->resume_thaw_pending = false;
+     p->end_time_ns = 0;
+ 
+     mp_mutex_unlock(&p->lock);
+@@ -456,6 +463,14 @@ void ao_set_paused(struct ao *ao, bool paused, bool eof)
+                 ao->driver->set_pause(ao, true);
+             } else {
+                 p->end_time_ns = p->queued_time_ns + mp_time_ns();
++                // Keep the clock frozen until the first real read: high-
++                // latency sinks re-anchor their timebase shortly after the
++                // rate restart (replaying in-flight audio), and a clock
++                // extrapolated from pre-restart timing runs ahead of what
++                // is actually heard — the debt then lands as a video
++                // freeze mid-play. The driver withholds reads until its
++                // sink settles; the first read thaws us at true timing.
++                p->resume_thaw_pending = true;
+                 ao->driver->set_pause(ao, false);
+             }
+         } else {

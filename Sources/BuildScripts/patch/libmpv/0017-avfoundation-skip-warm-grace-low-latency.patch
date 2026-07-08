@@ -1,0 +1,33 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 0064b15..a986250 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -331,14 +331,21 @@ static void start(struct ao *ao)
+         // just flushed the sink buffer and the seek invalidated the demuxer
+         // cache — give the cache a short grace period before the renderer's
+         // refill burst. feed() engages the rate once primed.
+-        dispatch_block_t blk = dispatch_block_create(0, ^{
+-            struct priv *pp = ao->priv;
+-            pp->hold_block = NULL;
++        // Low-latency routes skip the grace: priming there takes ~20ms and
++        // the 250ms was the bulk of every visible resume freeze (device-
++        // measured); their tiny queue can't stampede the demuxer anyway.
++        if (!high_latency_route) {
+             start_feeding(ao);
+-        });
+-        p->hold_block = blk;
+-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250000000),
+-                       p->queue, blk);
++        } else {
++            dispatch_block_t blk = dispatch_block_create(0, ^{
++                struct priv *pp = ao->priv;
++                pp->hold_block = NULL;
++                start_feeding(ao);
++            });
++            p->hold_block = blk;
++            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250000000),
++                           p->queue, blk);
++        }
+     } else if (!high_latency_route) {
+         // Low-latency cold start: no handshake window to wait out; feed
+         // immediately, engage once engage_ns is queued.

@@ -1,0 +1,135 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 105613c..728de73 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -85,6 +85,15 @@ - (void)handleRestartNotification:(NSNotification*)notification;
+     int64_t resume_settle_until;
+     int64_t resume_settle_tb;
+     bool resume_settle_refresh;
++    // Engage failsafe: demand-driven feeding can strand a warm restart
++    // below engage_ns — the renderer stops requesting data at ~1s queued
++    // while the rate is still 0, and nothing ever plays, drains, or
++    // requests again (deterministic after a route-change restart into a
++    // paused core, observed as a frozen player rescued only by the app's
++    // stall reload). If real content has been enqueued but feeding has
++    // stalled and the rate never engaged, engage with what we have.
++    dispatch_block_t engage_failsafe_block;
++    int64_t last_content_ns;
+     // Clock diagnostics (diag build only).
+     int64_t diag_last_ns;
+     int64_t diag_burst_until_ns;
+@@ -142,6 +151,10 @@ static bool diag_should_log(struct ao *ao)
+ static void engage_rate(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
++    if (p->engage_failsafe_block) {
++        dispatch_block_cancel(p->engage_failsafe_block);
++        p->engage_failsafe_block = NULL;
++    }
+     p->rate_engaged = true;
+     p->primed_once = true;
+     [p->synchronizer setRate:1];
+@@ -150,10 +163,12 @@ static void engage_rate(struct ao *ao)
+ }
+ 
+ static void feed(struct ao *ao);
++static void arm_engage_failsafe(struct ao *ao);
+ 
+ static void start_feeding(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
++    arm_engage_failsafe(ao);
+     if (p->feeding_started)
+         return;
+     p->feeding_started = true;
+@@ -173,6 +188,38 @@ static void cancel_hold(struct ao *ao)
+         dispatch_block_cancel(p->throttle_block);
+         p->throttle_block = NULL;
+     }
++    if (p->engage_failsafe_block) {
++        dispatch_block_cancel(p->engage_failsafe_block);
++        p->engage_failsafe_block = NULL;
++    }
++}
++
++static void arm_engage_failsafe(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    if (p->engage_failsafe_block || p->rate_engaged)
++        return;
++    dispatch_block_t blk = dispatch_block_create(0, ^{
++        struct priv *pp = ao->priv;
++        pp->engage_failsafe_block = NULL;
++        if (pp->rate_engaged || pp->paused)
++            return;
++        // Warm restarts only: a cold start legitimately spends seconds
++        // filling toward engage_ns and engaging it early re-opens the
++        // underrun death spiral. Stalled = content was enqueued but none
++        // for 400ms while the rate never engaged.
++        int64_t now = mp_time_ns();
++        if (pp->primed_once && pp->last_content_ns &&
++            now - pp->last_content_ns > 400000000) {
++            MP_WARN(ao, "[clockdiag] engage-failsafe (feeding stalled below engage threshold)\n");
++            engage_rate(ao);
++        } else {
++            arm_engage_failsafe(ao);
++        }
++    });
++    p->engage_failsafe_block = blk;
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500000000),
++                   p->queue, blk);
+ }
+ 
+ static void feed(struct ao *ao)
+@@ -228,7 +275,9 @@ static void feed(struct ao *ao)
+     int64_t time_delta = CMTimeGetNanoseconds(CMTimeMake(request_sample_count, samplerate));
+     bool eof = false;
+     int real_sample_count;
++    bool was_preroll = false;
+     if (p->preroll_samples > 0) {
++        was_preroll = true;
+         real_sample_count = (int)MPMIN((int64_t)request_sample_count, p->preroll_samples);
+         memset(data[0], 0, (size_t)real_sample_count * sstride);
+         p->preroll_samples -= real_sample_count;
+@@ -245,6 +294,24 @@ static void feed(struct ao *ao)
+     if (real_sample_count == 0) {
+         if (diag_should_log(ao))
+             diag(ao, "empty", 0);
++        // Nothing enqueued means the renderer re-invokes this callback
++        // immediately — a busy-wait at ~1.5kHz for as long as the core has
++        // nothing to give (paused core after a route-change restart ran it
++        // for 17s straight). Pre-engage, back off to a 100ms poll instead.
++        if (!p->rate_engaged) {
++            [p->renderer stopRequestingMediaData];
++            p->feeding_started = false;
++            if (p->throttle_block)
++                dispatch_block_cancel(p->throttle_block);
++            dispatch_block_t blk = dispatch_block_create(0, ^{
++                struct priv *pp = ao->priv;
++                pp->throttle_block = NULL;
++                start_feeding(ao);
++            });
++            p->throttle_block = blk;
++            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100000000),
++                           p->queue, blk);
++        }
+         goto finish;
+     }
+ 
+@@ -289,6 +356,8 @@ static void feed(struct ao *ao)
+ 
+     [p->renderer enqueueSampleBuffer:sample_buffer];
+     p->resume_settle_refresh = false;
++    if (!was_preroll)
++        p->last_content_ns = mp_time_ns();
+ 
+     time_delta = CMTimeGetNanoseconds(CMTimeMake(real_sample_count, samplerate));
+     p->end_time_av = end_time_av + time_delta;
+@@ -320,6 +389,7 @@ static void start(struct ao *ao)
+     p->paused = false;
+     p->resume_settle_until = 0;
+     p->resume_settle_refresh = false;
++    p->last_content_ns = 0;
+     p->prime_ns = 0;
+ #if TARGET_OS_IPHONE
+     p->prime_ns = (int64_t)(AVAudioSession.sharedInstance.outputLatency * 1e9);

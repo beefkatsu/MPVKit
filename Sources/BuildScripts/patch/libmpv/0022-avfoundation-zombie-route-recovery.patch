@@ -1,0 +1,98 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 93079e6..824a6e1 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -36,6 +36,7 @@ @interface AVObserver : NSObject {
+     struct ao *ao;
+ }
+ - (void)handleRestartNotification:(NSNotification*)notification;
++- (void)handleRouteChangeNotification:(NSNotification*)notification;
+ @end
+ 
+ struct priv {
+@@ -94,6 +95,17 @@ - (void)handleRestartNotification:(NSNotification*)notification;
+     // stalled and the rate never engaged, engage with what we have.
+     dispatch_block_t engage_failsafe_block;
+     int64_t last_content_ns;
++    // Zombie-route detector: after a dirty route loss (active output
++    // deselected with no replacement) the fallback session is a zombie —
++    // it reports the DEAD route's outputLatency and the synchronizer
++    // timebase never runs after setRate:1 (rate=1, feeds accepted, tb
++    // frozen: silent playback, system-wide until a route re-assertion).
++    // If the timebase hasn't moved within the window after engage, the
++    // renderer/synchronizer pair is wedged — only a full AO rebuild
++    // (fresh session activation + renderer) recovers.
++    int64_t engage_tb;
++    int64_t engage_wall_ns;
++    bool engage_verified;
+     // Clock diagnostics (diag build only).
+     int64_t diag_last_ns;
+     int64_t diag_burst_until_ns;
+@@ -157,6 +169,9 @@ static void engage_rate(struct ao *ao)
+     }
+     p->rate_engaged = true;
+     p->primed_once = true;
++    p->engage_tb = CMTimeGetNanoseconds([p->synchronizer currentTime]);
++    p->engage_wall_ns = mp_time_ns();
++    p->engage_verified = false;
+     [p->synchronizer setRate:1];
+     diag_burst(ao);
+     diag(ao, "engage", -1);
+@@ -240,6 +255,21 @@ static void feed(struct ao *ao)
+     int64_t cur_time_mp = mp_time_ns();
+     int64_t end_time_av = MPMAX(p->end_time_av, cur_time_av);
+ 
++    if (p->rate_engaged && !p->engage_verified) {
++        if (cur_time_av - p->engage_tb > 50000000) {
++            p->engage_verified = true; // timebase is really running
++        } else if (cur_time_mp - p->engage_wall_ns > 1500000000) {
++            // rate=1 for 1.5s and the timebase never moved (longest healthy
++            // engage→tick gap on device is ~0.5s): wedged zombie session.
++            MP_WARN(ao, "[clockdiag] timebase dead %.1fs after engage; rebuilding audio output
++",
++                    (cur_time_mp - p->engage_wall_ns) / 1e9);
++            p->engage_verified = true; // one-shot until the next engage
++            ao_request_reload(ao);
++            goto finish;
++        }
++    }
++
+     // Resume settle: withhold reads until the sink re-anchors (tb steps
+     // back), starts consuming normally (tb advances), or the window times
+     // out — the renderer plays from its intact queue meanwhile.
+@@ -556,6 +586,25 @@ - (instancetype)initWithAO:(struct ao*)_ao {
+     }
+     return self;
+ }
++- (void)handleRouteChangeNotification:(NSNotification*)notification {
++#if TARGET_OS_IPHONE
++    // Deselecting the active output with no replacement (reason:
++    // OldDeviceUnavailable — the "unplugged headphones" event, e.g.
++    // switching the HomePods off in the picker while TV speakers are
++    // also off) drops the session into a zombie fallback: it reports the
++    // dead route's outputLatency and the synchronizer never consumes.
++    // An in-place stop/start inherits the zombie (device-verified,
++    // system-wide silence that even hits other apps); request a full AO
++    // rebuild instead. Clean re-selections keep the fast in-place path
++    // via the renderer notifications below.
++    NSNumber *reason = notification.userInfo[AVAudioSessionRouteChangeReasonKey];
++    if (reason && reason.unsignedIntegerValue == AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
++        MP_WARN(ao, "active output lost (dirty route change); rebuilding audio output
++");
++        ao_request_reload(ao);
++    }
++#endif
++}
+ - (void)handleRestartNotification:(NSNotification*)notification {
+     char *name = cfstr_get_cstr((CFStringRef)notification.name);
+     MP_WARN(ao, "restarting due to system notification; this will cause desync\n");
+@@ -671,6 +720,9 @@ static int init(struct ao *ao)
+     }
+ #endif
+     [center addObserver:p->observer selector:@selector(handleRestartNotification:) name:AVSampleBufferAudioRendererWasFlushedAutomaticallyNotification object:p->renderer];
++#if TARGET_OS_IPHONE
++    [center addObserver:p->observer selector:@selector(handleRouteChangeNotification:) name:AVAudioSessionRouteChangeNotification object:AVAudioSession.sharedInstance];
++#endif
+ 
+     return CONTROL_OK;
+ 

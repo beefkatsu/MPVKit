@@ -1,0 +1,56 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 000930b..b3bf6d8 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -111,6 +111,14 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification;
+     int64_t diag_burst_until_ns;
+ };
+ 
++// Set when the dead-timebase watchdog requests a rebuild: the zombie
++// session survives a plain renderer/synchronizer rebuild (device log:
++// a fresh AO instance 10s after the dirty swap still read the dead
++// route's outputLatency and wedged identically). A route re-assertion
++// (picker re-selection) heals it instantly; deactivate/reactivate of
++// the session on the next init is the app-level equivalent to try.
++static volatile bool bounce_session_on_init;
++
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+ {
+     time = CMTimeConvertScale(time, 1000000000, kCMTimeRoundingMethod_Default);
+@@ -264,6 +272,7 @@ static void feed(struct ao *ao)
+             MP_WARN(ao, "[clockdiag] timebase dead %.1fs after engage; rebuilding audio output\n",
+                     (cur_time_mp - p->engage_wall_ns) / 1e9);
+             p->engage_verified = true; // one-shot until the next engage
++            bounce_session_on_init = true;
+             ao_request_reload(ao);
+             goto finish;
+         }
+@@ -597,6 +606,14 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification {
+     // rebuild instead. Clean re-selections keep the fast in-place path
+     // via the renderer notifications below.
+     NSNumber *reason = notification.userInfo[AVAudioSessionRouteChangeReasonKey];
++    // Reason values (AVAudioSessionRouteChangeReason): 1 newDeviceAvailable,
++    // 2 oldDeviceUnavailable, 3 categoryChange, 4 override,
++    // 6 wakeFromSleep, 7 noSuitableRouteForCategory, 8 routeConfigurationChange.
++    // Logged unconditionally: the picker's deselect-with-no-replacement
++    // ("dirty swap") did NOT arrive as oldDeviceUnavailable on device —
++    // this pins down what it actually sends.
++    MP_WARN(ao, "[clockdiag] route change reason=%lu\n",
++            (unsigned long)(reason ? reason.unsignedIntegerValue : 0));
+     if (reason && reason.unsignedIntegerValue == AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
+         MP_WARN(ao, "active output lost (dirty route change); rebuilding audio output\n");
+         ao_request_reload(ao);
+@@ -620,6 +637,13 @@ static int init(struct ao *ao)
+ 
+ #if TARGET_OS_IPHONE
+     AVAudioSession *instance = AVAudioSession.sharedInstance;
++    if (bounce_session_on_init) {
++        bounce_session_on_init = false;
++        MP_WARN(ao, "[clockdiag] bouncing audio session (zombie-route recovery)\n");
++        [instance setActive:NO
++                withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
++                      error:nil];
++    }
+     NSInteger maxChannels = instance.maximumOutputNumberOfChannels;
+     NSInteger prefChannels = MIN(maxChannels, ao->channels.num);
+     [instance setCategory:AVAudioSessionCategoryPlayback error:nil];

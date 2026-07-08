@@ -1,0 +1,20 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index a844550..105613c 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -433,6 +433,15 @@ static bool set_pause(struct ao *ao, bool paused)
+         start_feeding(ao);
+         if (p->rate_engaged)
+             [p->synchronizer setRate:1];
++        // Kick one read immediately: with a deep queue the renderer may not
++        // request data for hundreds of ms, and the core clock stays frozen
++        // (resume_thaw_pending) until a read delivers fresh timing — that
++        // froze video ~0.5s on low-latency routes while audio played, then
++        // snapped it forward. On high-latency routes the settle window
++        // armed above decides whether this read actually reads.
++        dispatch_async(p->queue, ^{
++            feed(ao);
++        });
+         diag_burst(ao);
+         diag(ao, "unpause-post", -1);
+     }

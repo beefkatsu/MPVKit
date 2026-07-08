@@ -1,0 +1,32 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 728de73..93079e6 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -409,13 +409,20 @@ static void start(struct ao *ao)
+     // device — they only pay the cost (1s+ added to every resume and cold
+     // start). Gate on route latency; AirPlay path is unchanged.
+     bool high_latency_route = p->prime_ns >= 750000000;
+-    // Preroll: 1s cold (route handshake + first-render halt land in
+-    // silence), halved on warm restarts (resume/seek) — the route is live,
+-    // only the rate-start halt needs covering; the full second was never
+-    // separately tuned for warm and directly extends every resume freeze.
+-    p->preroll_samples = high_latency_route
+-        ? (p->primed_once ? ao->samplerate / 2 : ao->samplerate)
+-        : 0;
++    // Preroll: 1s cold on high-latency routes (route handshake +
++    // first-render halt land in silence); 0.5s on ALL warm restarts. The
++    // rate-start halt (~0.4-0.5s before the sink's timebase actually
++    // advances after setRate:1) exists on low-latency routes too — device
++    // logs show the core clock extrapolating ~0.3s ahead during the halt
++    // on TV-speaker scrub-resumes, then paying it back as a ~0.16s
++    // mid-play freeze. With the halt landing in silence, content starts
++    // when the timebase is already live: audio+video begin together and
++    // the mid-play blip disappears (first sound lands at roughly the same
++    // wall time either way — pre-0021 video simply started silently).
++    // Low-latency COLD starts stay preroll-free (device-verified clean).
++    p->preroll_samples = p->primed_once
++        ? ao->samplerate / 2
++        : (high_latency_route ? ao->samplerate : 0);
+     MP_WARN(ao, "[clockdiag] start prime=%.3f engage=%.3f cap=%.3f preroll=%.2fs warm=%d\n",
+             p->prime_ns / 1e9, p->engage_ns / 1e9, p->cap_ns / 1e9,
+             p->preroll_samples / (double)ao->samplerate, p->primed_once ? 1 : 0);

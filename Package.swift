@@ -10,6 +10,8 @@ let package = Package(
             name: "MPVKit",
             targets: ["_MPVKit"]
         ),
+        .library(
+        ),
     ],
     targets: [
         .target(
@@ -49,7 +51,54 @@ let package = Package(
                 .linkedLibrary("c++"),
             ]
         ),
+        .target(
+            dependencies: [
+                .target(name: "Libluajit", condition: .when(platforms: [.macOS])),
+            ],
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("CoreAudio"),
+            ]
+        ),
+        .target(
+            dependencies: [
+                "Libssl", "Libcrypto", "Libass", "Libfreetype", "Libfribidi", "Libharfbuzz",
+                "MoltenVK", "Libshaderc_combined", "lcms2", "Libplacebo", "Libdovi", "Libunibreak",
+                "Libsmbclient", "gmp", "nettle", "hogweed", "gnutls", "Libdav1d", "Libuavs3d"
+            ],
+            linkerSettings: [
+                .linkedFramework("AudioToolbox"),
+                .linkedFramework("CoreVideo"),
+                .linkedFramework("CoreFoundation"),
+                .linkedFramework("CoreMedia"),
+                .linkedFramework("Metal"),
+                .linkedFramework("VideoToolbox"),
+                .linkedLibrary("bz2"),
+                .linkedLibrary("iconv"),
+                .linkedLibrary("expat"),
+                .linkedLibrary("resolv"),
+                .linkedLibrary("xml2"),
+                .linkedLibrary("z"),
+                .linkedLibrary("c++"),
+            ]
+        ),
 
+        .binaryTarget(
+        ),
+        .binaryTarget(
+        ),
+        .binaryTarget(
+        ),
+        .binaryTarget(
+        ),
+        .binaryTarget(
+        ),
+        .binaryTarget(
+        ),
+        .binaryTarget(
+        ),
+        .binaryTarget(
+        ),
         //AUTO_GENERATE_TARGETS_BEGIN//
 
         .binaryTarget(
@@ -116,6 +165,11 @@ let package = Package(
             checksum: "1e41f5a69c74f6c6407aab84a65ccd0b34e73fa44465f488f99bf22bd61b070d"
         ),
 
+        .binaryTarget(
+            name: "Libsmbclient",
+            url: "https://github.com/mpvkit/libsmbclient-build/releases/download/4.15.13-2512/Libsmbclient.xcframework.zip",
+            checksum: "3a53375fab11bc888cc553664ea5dd902208d04f0cc21ec746302bf356246b6f"
+        ),
 
         .binaryTarget(
             name: "Libbluray",
@@ -167,38 +221,38 @@ let package = Package(
 
         .binaryTarget(
             name: "Libavcodec",
-            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-26/Libavcodec.xcframework.zip",
-            checksum: "02c0f2c2ba6fb80aeb805c33cc46efe5811643075fd820a06c9094ab76ba9cd1"
+            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-27/Libavcodec.xcframework.zip",
+            checksum: "00509ce2da120ad2a434393124b63d75bf57c82068962d39b34a4865f650a329"
         ),
         .binaryTarget(
             name: "Libavdevice",
-            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-26/Libavdevice.xcframework.zip",
-            checksum: "8d5a04b9a5bcf8f671abc4b1ec92548c20a53aa4e96d3c4ea4833b0a95ba3c7f"
+            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-27/Libavdevice.xcframework.zip",
+            checksum: "ec22658c1f397855cee4ec0ba8d6be2e8b74332d189d7b004141d8d82fdf1e97"
         ),
         .binaryTarget(
             name: "Libavformat",
-            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-26/Libavformat.xcframework.zip",
-            checksum: "1500b247a91f80897aa8845e2b37f1955cde9e4a4b450b3391924957b60f35c2"
+            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-27/Libavformat.xcframework.zip",
+            checksum: "4b51aef6da4bd72a65b6c485c21b1ee03adde7b017a74d76ad2cb39a13d54f5c"
         ),
         .binaryTarget(
             name: "Libavfilter",
-            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-26/Libavfilter.xcframework.zip",
-            checksum: "1846bdce58d15a3777c22be8834b118d82b12e1e7af408806bdfb585ee75868e"
+            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-27/Libavfilter.xcframework.zip",
+            checksum: "9a42b79fa041bd61eea1d802eb3f050e4745ee4c1123505ee3a9055df35bf292"
         ),
         .binaryTarget(
             name: "Libavutil",
-            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-26/Libavutil.xcframework.zip",
-            checksum: "268da92027fbdf205a15a7fb9bee4c10275a43f05ee39bbe32ad9fb64a2d79d7"
+            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-27/Libavutil.xcframework.zip",
+            checksum: "a5d1b6b85f37c546131329f7d9f6ca4963b3c331f32cb9152514b66bf72a8bfe"
         ),
         .binaryTarget(
             name: "Libswresample",
-            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-26/Libswresample.xcframework.zip",
-            checksum: "09bf3f5dd56f087038280e07c7e24e7fa103a86d92bcc037e0633ae7c141b58b"
+            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-27/Libswresample.xcframework.zip",
+            checksum: "18d2862f0c3146753e903567ef9ea99e26d99f89646fc37d813c6f11f5db218d"
         ),
         .binaryTarget(
             name: "Libswscale",
-            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-26/Libswscale.xcframework.zip",
-            checksum: "52bd0eec638debd3ebda8ca5aa91074fb9c1b378c5c17d1c513763bf437309f3"
+            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-27/Libswscale.xcframework.zip",
+            checksum: "27b3216c1eaff25cd89c9a24f2471f9c5f032f2aa6e4c11bb01cd007ac31154f"
         ),
 
         .binaryTarget(
@@ -215,8 +269,8 @@ let package = Package(
 
         .binaryTarget(
             name: "Libmpv",
-            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-26/Libmpv.xcframework.zip",
-            checksum: "3db4b6f0018a4cfa65b615a46adf2bf2906acc3120fa2da1d27e637b44bf4f70"
+            url: "https://github.com/beefkatsu/MPVKit/releases/download/0.41.0-27/Libmpv.xcframework.zip",
+            checksum: "1e9c1bc98bcc7ce3be1b8db608ca019a69d4e1381895553f918141c61a1c5a8d"
         ),
         //AUTO_GENERATE_TARGETS_END//
     ]

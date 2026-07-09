@@ -1,0 +1,65 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index b3bf6d8..95afc90 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -111,14 +111,6 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification;
+     int64_t diag_burst_until_ns;
+ };
+ 
+-// Set when the dead-timebase watchdog requests a rebuild: the zombie
+-// session survives a plain renderer/synchronizer rebuild (device log:
+-// a fresh AO instance 10s after the dirty swap still read the dead
+-// route's outputLatency and wedged identically). A route re-assertion
+-// (picker re-selection) heals it instantly; deactivate/reactivate of
+-// the session on the next init is the app-level equivalent to try.
+-static volatile bool bounce_session_on_init;
+-
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+ {
+     time = CMTimeConvertScale(time, 1000000000, kCMTimeRoundingMethod_Default);
+@@ -234,8 +226,12 @@ static void arm_engage_failsafe(struct ao *ao)
+         int64_t now = mp_time_ns();
+         if (pp->primed_once && pp->last_content_ns &&
+             now - pp->last_content_ns > 400000000) {
+-            MP_WARN(ao, "[clockdiag] engage-failsafe (feeding stalled below engage threshold)\n");
+-            engage_rate(ao);
++            // Do NOT engage: this state only ever occurs on a zombie route
++            // (dirty-swap fallback), where engaging produces silently-
++            // advancing video — worse than an honest freeze. Log it and let
++            // the app's stall watchdog run the reconnect chain (device-
++            // verified preference, July 9).
++            MP_WARN(ao, "[clockdiag] feeding stalled below engage threshold (zombie route?) — holding\n");
+         } else {
+             arm_engage_failsafe(ao);
+         }
+@@ -272,7 +268,6 @@ static void feed(struct ao *ao)
+             MP_WARN(ao, "[clockdiag] timebase dead %.1fs after engage; rebuilding audio output\n",
+                     (cur_time_mp - p->engage_wall_ns) / 1e9);
+             p->engage_verified = true; // one-shot until the next engage
+-            bounce_session_on_init = true;
+             ao_request_reload(ao);
+             goto finish;
+         }
+@@ -531,7 +526,7 @@ static bool set_pause(struct ao *ao, bool paused)
+         });
+         p->resume_settle_until = 0;
+         p->resume_settle_refresh = false;
+-        diag(ao, "pause-pre", -1);
++            diag(ao, "pause-pre", -1);
+         [p->synchronizer setRate:0];
+         diag(ao, "pause-post", -1);
+     } else {
+@@ -637,13 +632,6 @@ static int init(struct ao *ao)
+ 
+ #if TARGET_OS_IPHONE
+     AVAudioSession *instance = AVAudioSession.sharedInstance;
+-    if (bounce_session_on_init) {
+-        bounce_session_on_init = false;
+-        MP_WARN(ao, "[clockdiag] bouncing audio session (zombie-route recovery)\n");
+-        [instance setActive:NO
+-                withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+-                      error:nil];
+-    }
+     NSInteger maxChannels = instance.maximumOutputNumberOfChannels;
+     NSInteger prefChannels = MIN(maxChannels, ao->channels.num);
+     [instance setCategory:AVAudioSessionCategoryPlayback error:nil];

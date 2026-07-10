@@ -1,5 +1,5 @@
 diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
-index 2069d42..bb3df00 100644
+index 2069d42..1e15e5e 100644
 --- a/audio/out/ao_avfoundation.m
 +++ b/audio/out/ao_avfoundation.m
 @@ -115,9 +115,6 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification;
@@ -93,15 +93,16 @@ index 2069d42..bb3df00 100644
                      cur_time_av / 1e9, p->resume_settle_tb / 1e9);
          } else {
              goto finish;
-@@ -307,7 +264,6 @@ static void feed(struct ao *ao)
+@@ -306,8 +263,6 @@ static void feed(struct ao *ao)
+ 
      if (!p->resume_settle_refresh &&
          p->rate_engaged && p->cap_ns > 0 && end_time_av - cur_time_av > p->cap_ns) {
-         if (diag_should_log(ao))
+-        if (diag_should_log(ao))
 -            diag(ao, "capped", 0);
          [p->renderer stopRequestingMediaData];
          p->feeding_started = false;
          dispatch_block_t blk = dispatch_block_create(0, ^{
-@@ -336,7 +292,6 @@ static void feed(struct ao *ao)
+@@ -336,15 +291,12 @@ static void feed(struct ao *ao)
          real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
      }
      if (eof) {
@@ -109,23 +110,24 @@ index 2069d42..bb3df00 100644
          if (!p->rate_engaged && !p->paused)
              engage_rate(ao);
          [p->renderer stopRequestingMediaData];
-@@ -344,7 +299,6 @@ static void feed(struct ao *ao)
+         ao_stop_streaming(ao);
      }
      if (real_sample_count == 0) {
-         if (diag_should_log(ao))
+-        if (diag_should_log(ao))
 -            diag(ao, "empty", 0);
          // Nothing enqueued means the renderer re-invokes this callback
          // immediately — a busy-wait at ~1.5kHz for as long as the core has
          // nothing to give (paused core after a route-change restart ran it
-@@ -415,7 +369,6 @@ static void feed(struct ao *ao)
+@@ -414,8 +366,6 @@ static void feed(struct ao *ao)
+     p->end_time_av = end_time_av + time_delta;
      p->transfer_in_flight_ns = 0;
  
-     if (diag_should_log(ao))
+-    if (diag_should_log(ao))
 -        diag(ao, p->preroll_samples > 0 ? "preroll" : "feed", real_sample_count);
  
      if (!p->rate_engaged && !p->paused &&
          p->end_time_av - cur_time_av >= p->engage_ns)
-@@ -498,11 +451,6 @@ static void start(struct ao *ao)
+@@ -498,11 +448,6 @@ static void start(struct ao *ao)
      p->preroll_samples = p->primed_once
          ? ao->samplerate / 2
          : (high_latency_route ? ao->samplerate : 0);
@@ -137,7 +139,7 @@ index 2069d42..bb3df00 100644
      if (p->prime_ns <= 0) {
          p->rate_engaged = true;
          [p->synchronizer setRate:1];
-@@ -548,7 +496,6 @@ static void stop(struct ao *ao)
+@@ -548,7 +493,6 @@ static void stop(struct ao *ao)
  {
      struct priv *p = ao->priv;
  
@@ -145,7 +147,7 @@ index 2069d42..bb3df00 100644
      dispatch_sync(p->queue, ^{
          cancel_hold(ao);
          [p->renderer stopRequestingMediaData];
-@@ -568,13 +515,10 @@ static bool set_pause(struct ao *ao, bool paused)
+@@ -568,13 +512,10 @@ static bool set_pause(struct ao *ao, bool paused)
          });
          p->resume_settle_until = 0;
          p->resume_settle_refresh = false;
@@ -159,7 +161,7 @@ index 2069d42..bb3df00 100644
          // High-latency routes: arm the resume settle before feeding starts
          // (see struct comment) — the core holds its clock frozen until the
          // first read we allow through.
-@@ -594,8 +538,6 @@ static bool set_pause(struct ao *ao, bool paused)
+@@ -594,8 +535,6 @@ static bool set_pause(struct ao *ao, bool paused)
          dispatch_async(p->queue, ^{
              feed(ao);
          });
@@ -168,7 +170,7 @@ index 2069d42..bb3df00 100644
      }
  
      return true;
-@@ -649,7 +591,7 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification {
+@@ -649,7 +588,7 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification {
      // Logged unconditionally: the picker's deselect-with-no-replacement
      // ("dirty swap") did NOT arrive as oldDeviceUnavailable on device —
      // this pins down what it actually sends.

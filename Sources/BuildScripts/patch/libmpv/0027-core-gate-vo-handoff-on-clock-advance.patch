@@ -1,0 +1,80 @@
+diff --git a/player/core.h b/player/core.h
+index eb7f508..0f7e261 100644
+--- a/player/core.h
++++ b/player/core.h
+@@ -371,6 +371,12 @@ typedef struct MPContext {
+     /* timestamp of video frame currently visible on screen
+      * (or at least queued to be flipped by VO) */
+     double video_pts;
++    /* audio playback position (playing_audio_pts) captured when the last
++     * frame was handed to the VO; MP_NOPTS_VALUE when unset or audio is not
++     * the sync master. The VO deadline is wall-clock, so if the audio clock
++     * is frozen (AO holding its timebase while priming a device sink), the
++     * next handoff must wait until the clock actually advances. */
++    double last_vo_handoff_apts;
+     // Last seek target.
+     double last_seek_pts;
+     // Frame duration field from demuxer. Only used for duration of the last
+diff --git a/player/video.c b/player/video.c
+index 0e1ac29..addd915 100644
+--- a/player/video.c
++++ b/player/video.c
+@@ -112,6 +112,7 @@ void reset_video_state(struct MPContext *mpctx)
+     mpctx->delay = 0;
+     mpctx->time_frame = 0;
+     mpctx->video_pts = MP_NOPTS_VALUE;
++    mpctx->last_vo_handoff_apts = MP_NOPTS_VALUE;
+     mpctx->last_frame_duration = 0;
+     mpctx->num_past_frames = 0;
+     mpctx->total_avsync_change = 0;
+@@ -1214,6 +1215,40 @@ void write_video(struct MPContext *mpctx)
+         return;
+     }
+ 
++    // The VO deadline below is wall-clock, computed once at handoff. If the
++    // audio clock (the sync master) has not advanced since the previous
++    // handoff — e.g. the AO froze its timebase while (re)priming a device
++    // sink after a resume — a wall deadline still expires, and the VO would
++    // flip this frame during the freeze, one frame ahead of every position
++    // property. Hold the handoff until the clock actually moves.
++    if (mpctx->video_status == STATUS_PLAYING &&
++        mpctx->audio_status == STATUS_PLAYING &&
++        mpctx->ao_chain && mpctx->ao && !ao_untimed(mpctx->ao) &&
++        !mpctx->display_sync_active && !opts->untimed &&
++        !(vo->driver->caps & VO_CAP_UNTIMED) && !vo_c->is_sparse &&
++        mpctx->video_pts != MP_NOPTS_VALUE)
++    {
++        double apts = playing_audio_pts(mpctx);
++        if (apts != MP_NOPTS_VALUE) {
++            if (mpctx->last_vo_handoff_apts == MP_NOPTS_VALUE) {
++                // No baseline yet (the previous handoff happened during
++                // restart, before audio became the sync master): record one
++                // and hold a single poll cycle so this first steady-state
++                // handoff also waits for the clock to demonstrably move.
++                mpctx->last_vo_handoff_apts = apts;
++                mp_set_timeout(mpctx, 0.01);
++                return;
++            }
++            if (apts <= mpctx->last_vo_handoff_apts + 1e-4) {
++                MP_TRACE(mpctx,
++                         "holding frame handoff: audio clock stalled at %f\n",
++                         apts);
++                mp_set_timeout(mpctx, 0.01);
++                return;
++            }
++        }
++    }
++
+     double time_frame = MPMAX(mpctx->time_frame, -1);
+     int64_t pts = mp_time_ns() + (int64_t)(time_frame * 1e9);
+ 
+@@ -1262,6 +1297,9 @@ void write_video(struct MPContext *mpctx)
+     }
+ 
+     mpctx->video_pts = mpctx->next_frames[0]->pts;
++    mpctx->last_vo_handoff_apts =
++        mpctx->audio_status == STATUS_PLAYING && mpctx->ao
++            ? playing_audio_pts(mpctx) : MP_NOPTS_VALUE;
+     mpctx->last_frame_duration =
+         mpctx->next_frames[0]->pkt_duration / mpctx->video_speed;
+ 

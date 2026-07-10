@@ -1,0 +1,23 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 95afc90..830b909 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -167,11 +167,17 @@ static void engage_rate(struct ao *ao)
+         dispatch_block_cancel(p->engage_failsafe_block);
+         p->engage_failsafe_block = NULL;
+     }
++    bool cold_start = !p->primed_once;
+     p->rate_engaged = true;
+     p->primed_once = true;
+     p->engage_tb = CMTimeGetNanoseconds([p->synchronizer currentTime]);
+     p->engage_wall_ns = mp_time_ns();
+-    p->engage_verified = false;
++    // Skip the dead-timebase watchdog on this AO instance's first engage:
++    // establishing a fresh device pipe (AirPlay) has been seen healthy at
++    // 5.1s engage->tick, and a false positive here reloads the AO into
++    // another cold start — a rebuild loop at playback start. Warm engages
++    // keep the 1.5s watchdog (longest healthy warm engage->tick is ~0.5s).
++    p->engage_verified = cold_start;
+     [p->synchronizer setRate:1];
+     diag_burst(ao);
+     diag(ao, "engage", -1);

@@ -1,0 +1,179 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 2069d42..bb3df00 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -115,9 +115,6 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification;
+     int64_t engage_tb;
+     int64_t engage_wall_ns;
+     bool engage_verified;
+-    // Clock diagnostics (diag build only).
+-    int64_t diag_last_ns;
+-    int64_t diag_burst_until_ns;
+ };
+ 
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+@@ -131,44 +128,6 @@ static CMTime CMTimeFromNanoseconds(int64_t time)
+     return CMTimeMake(time, 1000000000);
+ }
+ 
+-// Clock diagnostics (temporary, diag build only): the resume-from-pause
+-// clock rewind is invisible to every mpv property — it lives between the
+-// synchronizer timebase, the renderer queue, and the core's wall-clock
+-// pause bookkeeping. Print all three at every transition; full-rate for
+-// 4s after unpause/engage (the wobble window), 1/s otherwise.
+-static void diag(struct ao *ao, const char *tag, int n)
+-{
+-    struct priv *p = ao->priv;
+-    int64_t tb = CMTimeGetNanoseconds([p->synchronizer currentTime]);
+-    MP_WARN(ao, "[clockdiag] %s tb=%.3f end=%.3f q=%.3f rate=%.2f wall=%.3f eng=%d paused=%d n=%d\n",
+-            tag,
+-            tb / 1e9,
+-            p->end_time_av / 1e9,
+-            (p->end_time_av - tb) / 1e9,
+-            (double)[p->synchronizer rate],
+-            mp_time_ns() / 1e9,
+-            p->rate_engaged ? 1 : 0,
+-            p->paused ? 1 : 0,
+-            n);
+-}
+-
+-static void diag_burst(struct ao *ao)
+-{
+-    struct priv *p = ao->priv;
+-    p->diag_burst_until_ns = mp_time_ns() + 4000000000;
+-}
+-
+-static bool diag_should_log(struct ao *ao)
+-{
+-    struct priv *p = ao->priv;
+-    int64_t now = mp_time_ns();
+-    if (now < p->diag_burst_until_ns || now - p->diag_last_ns >= 1000000000) {
+-        p->diag_last_ns = now;
+-        return true;
+-    }
+-    return false;
+-}
+-
+ static void engage_rate(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+@@ -188,8 +147,6 @@ static void engage_rate(struct ao *ao)
+     // keep the 1.5s watchdog (longest healthy warm engage->tick is ~0.5s).
+     p->engage_verified = cold_start;
+     [p->synchronizer setRate:1];
+-    diag_burst(ao);
+-    diag(ao, "engage", -1);
+ }
+ 
+ static void feed(struct ao *ao);
+@@ -246,7 +203,7 @@ static void arm_engage_failsafe(struct ao *ao)
+             // advancing video — worse than an honest freeze. Log it and let
+             // the app's stall watchdog run the reconnect chain (device-
+             // verified preference, July 9).
+-            MP_WARN(ao, "[clockdiag] feeding stalled below engage threshold (zombie route?) — holding\n");
++            MP_WARN(ao, "feeding stalled below engage threshold (zombie route?) — holding\n");
+         } else {
+             arm_engage_failsafe(ao);
+         }
+@@ -280,7 +237,7 @@ static void feed(struct ao *ao)
+         } else if (cur_time_mp - p->engage_wall_ns > 1500000000) {
+             // rate=1 for 1.5s and the timebase never moved (longest healthy
+             // engage→tick gap on device is ~0.5s): wedged zombie session.
+-            MP_WARN(ao, "[clockdiag] timebase dead %.1fs after engage; rebuilding audio output\n",
++            MP_WARN(ao, "timebase dead %.1fs after engage; rebuilding audio output\n",
+                     (cur_time_mp - p->engage_wall_ns) / 1e9);
+             p->engage_verified = true; // one-shot until the next engage
+             ao_request_reload(ao);
+@@ -297,7 +254,7 @@ static void feed(struct ao *ao)
+             cur_time_mp > p->resume_settle_until) {
+             p->resume_settle_until = 0;
+             p->resume_settle_refresh = true; // one cap-bypass read anchors truth
+-            MP_WARN(ao, "[clockdiag] settle-done tb=%.3f (armed at %.3f)\n",
++            MP_VERBOSE(ao, "resume settle done tb=%.3f (armed at %.3f)\n",
+                     cur_time_av / 1e9, p->resume_settle_tb / 1e9);
+         } else {
+             goto finish;
+@@ -307,7 +264,6 @@ static void feed(struct ao *ao)
+     if (!p->resume_settle_refresh &&
+         p->rate_engaged && p->cap_ns > 0 && end_time_av - cur_time_av > p->cap_ns) {
+         if (diag_should_log(ao))
+-            diag(ao, "capped", 0);
+         [p->renderer stopRequestingMediaData];
+         p->feeding_started = false;
+         dispatch_block_t blk = dispatch_block_create(0, ^{
+@@ -336,7 +292,6 @@ static void feed(struct ao *ao)
+         real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
+     }
+     if (eof) {
+-        diag(ao, "eof", real_sample_count);
+         if (!p->rate_engaged && !p->paused)
+             engage_rate(ao);
+         [p->renderer stopRequestingMediaData];
+@@ -344,7 +299,6 @@ static void feed(struct ao *ao)
+     }
+     if (real_sample_count == 0) {
+         if (diag_should_log(ao))
+-            diag(ao, "empty", 0);
+         // Nothing enqueued means the renderer re-invokes this callback
+         // immediately — a busy-wait at ~1.5kHz for as long as the core has
+         // nothing to give (paused core after a route-change restart ran it
+@@ -415,7 +369,6 @@ static void feed(struct ao *ao)
+     p->transfer_in_flight_ns = 0;
+ 
+     if (diag_should_log(ao))
+-        diag(ao, p->preroll_samples > 0 ? "preroll" : "feed", real_sample_count);
+ 
+     if (!p->rate_engaged && !p->paused &&
+         p->end_time_av - cur_time_av >= p->engage_ns)
+@@ -498,11 +451,6 @@ static void start(struct ao *ao)
+     p->preroll_samples = p->primed_once
+         ? ao->samplerate / 2
+         : (high_latency_route ? ao->samplerate : 0);
+-    MP_WARN(ao, "[clockdiag] start prime=%.3f engage=%.3f cap=%.3f preroll=%.2fs warm=%d\n",
+-            p->prime_ns / 1e9, p->engage_ns / 1e9, p->cap_ns / 1e9,
+-            p->preroll_samples / (double)ao->samplerate, p->primed_once ? 1 : 0);
+-    diag_burst(ao);
+-    diag(ao, "start", -1);
+     if (p->prime_ns <= 0) {
+         p->rate_engaged = true;
+         [p->synchronizer setRate:1];
+@@ -548,7 +496,6 @@ static void stop(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+ 
+-    diag(ao, "stop", -1);
+     dispatch_sync(p->queue, ^{
+         cancel_hold(ao);
+         [p->renderer stopRequestingMediaData];
+@@ -568,13 +515,10 @@ static bool set_pause(struct ao *ao, bool paused)
+         });
+         p->resume_settle_until = 0;
+         p->resume_settle_refresh = false;
+-            diag(ao, "pause-pre", -1);
+         [p->synchronizer setRate:0];
+-        diag(ao, "pause-post", -1);
+     } else {
+         // Unpause always releases a cold-start hold: the user-visible pause
+         // has already given the route its warm-up.
+-        diag(ao, "unpause-pre", -1);
+         // High-latency routes: arm the resume settle before feeding starts
+         // (see struct comment) — the core holds its clock frozen until the
+         // first read we allow through.
+@@ -594,8 +538,6 @@ static bool set_pause(struct ao *ao, bool paused)
+         dispatch_async(p->queue, ^{
+             feed(ao);
+         });
+-        diag_burst(ao);
+-        diag(ao, "unpause-post", -1);
+     }
+ 
+     return true;
+@@ -649,7 +591,7 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification {
+     // Logged unconditionally: the picker's deselect-with-no-replacement
+     // ("dirty swap") did NOT arrive as oldDeviceUnavailable on device —
+     // this pins down what it actually sends.
+-    MP_WARN(ao, "[clockdiag] route change reason=%lu\n",
++    MP_VERBOSE(ao, "route change reason=%lu\n",
+             (unsigned long)(reason ? reason.unsignedIntegerValue : 0));
+     if (reason && reason.unsignedIntegerValue == AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
+         MP_WARN(ao, "active output lost (dirty route change); rebuilding audio output\n");

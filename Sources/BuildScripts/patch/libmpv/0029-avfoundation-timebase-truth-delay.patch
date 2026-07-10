@@ -1,18 +1,50 @@
 diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
-index 830b909..93c6aca 100644
+index 830b909..2069d42 100644
 --- a/audio/out/ao_avfoundation.m
 +++ b/audio/out/ao_avfoundation.m
-@@ -45,7 +45,8 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification;
+@@ -45,7 +45,16 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification;
      dispatch_queue_t queue;
      CMAudioFormatDescriptionRef format_description;
      AVObserver *observer;
 -    int64_t end_time_av;
 +    // Written on the feed queue, read from the core thread via get_delay().
 +    _Atomic int64_t end_time_av;
++    // Nonzero while a chunk has been drained from the core's soft queue but
++    // not yet reflected in end_time_av (the window inside feed() between
++    // ao_read_data and the end_time_av store). ao_get_delay sums the soft
++    // queue and our end at slightly different instants; without this the
++    // sum transiently under-reports by a whole chunk and the reported
++    // position blips FORWARD ~100ms — the core bakes early video deadlines
++    // off the blip and the VO drops frames all playback long.
++    _Atomic int64_t transfer_in_flight_ns;
      // Rate priming: on high-latency routes (AirPlay ~2s) the timebase must
      // not start until ~outputLatency of audio is queued in the renderer,
      // otherwise playback enters a persistent underrun/desync loop.
-@@ -418,6 +419,21 @@ static void feed(struct ao *ao)
+@@ -321,6 +330,9 @@ static void feed(struct ao *ao)
+         memset(data[0], 0, (size_t)real_sample_count * sstride);
+         p->preroll_samples -= real_sample_count;
+     } else {
++        // Account the chunk before it leaves the soft queue; cleared after
++        // end_time_av absorbs it (or at finish: on any early exit).
++        p->transfer_in_flight_ns = time_delta;
+         real_sample_count = ao_read_data(ao, data, request_sample_count, end_time_av - cur_time_av + cur_time_mp + time_delta, &eof, false, true);
+     }
+     if (eof) {
+@@ -400,6 +412,7 @@ static void feed(struct ao *ao)
+ 
+     time_delta = CMTimeGetNanoseconds(CMTimeMake(real_sample_count, samplerate));
+     p->end_time_av = end_time_av + time_delta;
++    p->transfer_in_flight_ns = 0;
+ 
+     if (diag_should_log(ao))
+         diag(ao, p->preroll_samples > 0 ? "preroll" : "feed", real_sample_count);
+@@ -413,16 +426,39 @@ static void feed(struct ao *ao)
+ error:
+     ao_request_reload(ao);
+ finish:
++    p->transfer_in_flight_ns = 0;
+     if (data[0]) CFAllocatorDeallocate(NULL, data[0]);
+     if (block_buffer) CFRelease(block_buffer);
      if (sample_buffer) CFRelease(sample_buffer);
  }
  
@@ -24,17 +56,29 @@ index 830b909..93c6aca 100644
 +static double get_delay(struct ao *ao)
 +{
 +    struct priv *p = ao->priv;
++    // Load order matters: in-flight first, end second. Seeing a cleared
++    // in-flight then guarantees the end store that preceded the clear is
++    // visible; the residual misordering (stale in-flight + fresh end)
++    // over-reports, which reads as a harmless backward blip — never the
++    // forward blip that bakes early video deadlines.
++    int64_t in_flight = p->transfer_in_flight_ns;
 +    int64_t end = p->end_time_av;
 +    if (end < 0)
 +        return 0;
 +    int64_t now = CMTimeGetNanoseconds([p->synchronizer currentTime]);
-+    return MPMAX(0, (end - now) / 1e9);
++    return MPMAX(0, (end + in_flight - now) / 1e9);
 +}
 +
  static void start(struct ao *ao)
  {
      struct priv *p = ao->priv;
-@@ -792,6 +808,7 @@ static void uninit(struct ao *ao)
+ 
+     p->end_time_av = -1;
++    p->transfer_in_flight_ns = 0;
+     p->rate_engaged = false;
+     p->feeding_started = false;
+     p->paused = false;
+@@ -792,6 +828,7 @@ static void uninit(struct ao *ao)
      .reset          = stop,
      .start          = start,
      .set_pause      = set_pause,

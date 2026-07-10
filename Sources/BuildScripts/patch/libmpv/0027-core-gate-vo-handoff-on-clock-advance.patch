@@ -1,8 +1,8 @@
 diff --git a/player/core.h b/player/core.h
-index eb7f508..a668d40 100644
+index eb7f508..27184a1 100644
 --- a/player/core.h
 +++ b/player/core.h
-@@ -371,6 +371,18 @@ typedef struct MPContext {
+@@ -371,6 +371,25 @@ typedef struct MPContext {
      /* timestamp of video frame currently visible on screen
       * (or at least queued to be flipped by VO) */
      double video_pts;
@@ -12,9 +12,16 @@ index eb7f508..a668d40 100644
 +     * is frozen (AO holding its timebase while priming a device sink), the
 +     * next handoff must wait until the clock actually advances. */
 +    double last_vo_handoff_apts;
-+    /* true while a handoff is being held on a stalled audio clock (above).
-+     * The recovery handoff waits until the clock reaches the frame's own pts
-+     * and goes out due-now: a deadline baked from the first sign of clock
++    /* wall time when the current handoff hold began (0 = not holding).
++     * Micro-holds are normal: the core re-enters write_video within
++     * microseconds of a handoff, before the clock has measurably advanced —
++     * those must release into the ordinary look-ahead deadline path or every
++     * frame ships due-now with zero scheduling margin (lumpy pacing, drops). */
++    int64_t vo_handoff_hold_start_ns;
++    /* true only when a hold has persisted past the real-freeze threshold
++     * (AO priming a device sink, rate-start halt, dead route). The recovery
++     * handoff then waits until the clock reaches the frame's own pts and
++     * goes out due-now: a deadline baked from the first sign of clock
 +     * movement can still be invalidated by a device sink re-anchoring the
 +     * clock backward before the frame's flip time. */
 +    bool vo_handoff_recovering;
@@ -22,19 +29,20 @@ index eb7f508..a668d40 100644
      double last_seek_pts;
      // Frame duration field from demuxer. Only used for duration of the last
 diff --git a/player/video.c b/player/video.c
-index 0e1ac29..f2a4de0 100644
+index 0e1ac29..308a74c 100644
 --- a/player/video.c
 +++ b/player/video.c
-@@ -112,6 +112,8 @@ void reset_video_state(struct MPContext *mpctx)
+@@ -112,6 +112,9 @@ void reset_video_state(struct MPContext *mpctx)
      mpctx->delay = 0;
      mpctx->time_frame = 0;
      mpctx->video_pts = MP_NOPTS_VALUE;
 +    mpctx->last_vo_handoff_apts = MP_NOPTS_VALUE;
++    mpctx->vo_handoff_hold_start_ns = 0;
 +    mpctx->vo_handoff_recovering = false;
      mpctx->last_frame_duration = 0;
      mpctx->num_past_frames = 0;
      mpctx->total_avsync_change = 0;
-@@ -1214,6 +1216,53 @@ void write_video(struct MPContext *mpctx)
+@@ -1214,6 +1217,65 @@ void write_video(struct MPContext *mpctx)
          return;
      }
  
@@ -56,21 +64,33 @@ index 0e1ac29..f2a4de0 100644
 +            if (mpctx->last_vo_handoff_apts == MP_NOPTS_VALUE) {
 +                // No baseline yet (the previous handoff happened during
 +                // restart, before audio became the sync master): record one
-+                // and hold a single poll cycle so this first steady-state
-+                // handoff also waits for the clock to demonstrably move.
++                // and hold a poll cycle so this first steady-state handoff
++                // also waits for the clock to demonstrably move.
 +                mpctx->last_vo_handoff_apts = apts;
-+                mpctx->vo_handoff_recovering = true;
++                mpctx->vo_handoff_hold_start_ns = mp_time_ns();
 +                mp_set_timeout(mpctx, 0.01);
 +                return;
 +            }
 +            if (apts <= mpctx->last_vo_handoff_apts + 1e-4) {
-+                mpctx->vo_handoff_recovering = true;
-+                MP_TRACE(mpctx,
-+                         "holding frame handoff: audio clock stalled at %f\n",
-+                         apts);
++                int64_t now = mp_time_ns();
++                if (!mpctx->vo_handoff_hold_start_ns)
++                    mpctx->vo_handoff_hold_start_ns = now;
++                // A hold that persists is a real clock freeze (AO priming a
++                // device sink, rate-start halt, dead route) — only then arm
++                // due-now recovery. Sub-threshold holds are just the core
++                // re-entering before the clock measurably moved; they must
++                // release into the ordinary look-ahead deadline or every
++                // frame ships with zero scheduling margin.
++                if (now - mpctx->vo_handoff_hold_start_ns > MP_TIME_MS_TO_NS(150)) {
++                    mpctx->vo_handoff_recovering = true;
++                    MP_TRACE(mpctx,
++                             "holding frame handoff: audio clock frozen at %f\n",
++                             apts);
++                }
 +                mp_set_timeout(mpctx, 0.01);
 +                return;
 +            }
++            mpctx->vo_handoff_hold_start_ns = 0;
 +            if (mpctx->vo_handoff_recovering) {
 +                // The clock is moving again, but until it has actually
 +                // reached this frame's pts it can still be re-anchored
@@ -88,7 +108,7 @@ index 0e1ac29..f2a4de0 100644
      double time_frame = MPMAX(mpctx->time_frame, -1);
      int64_t pts = mp_time_ns() + (int64_t)(time_frame * 1e9);
  
-@@ -1262,6 +1311,9 @@ void write_video(struct MPContext *mpctx)
+@@ -1262,6 +1324,9 @@ void write_video(struct MPContext *mpctx)
      }
  
      mpctx->video_pts = mpctx->next_frames[0]->pts;

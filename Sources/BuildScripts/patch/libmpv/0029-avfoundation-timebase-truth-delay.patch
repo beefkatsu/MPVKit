@@ -1,0 +1,79 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 830b909..93c6aca 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -45,7 +45,8 @@ - (void)handleRouteChangeNotification:(NSNotification*)notification;
+     dispatch_queue_t queue;
+     CMAudioFormatDescriptionRef format_description;
+     AVObserver *observer;
+-    int64_t end_time_av;
++    // Written on the feed queue, read from the core thread via get_delay().
++    _Atomic int64_t end_time_av;
+     // Rate priming: on high-latency routes (AirPlay ~2s) the timebase must
+     // not start until ~outputLatency of audio is queued in the renderer,
+     // otherwise playback enters a persistent underrun/desync loop.
+@@ -418,6 +419,21 @@ static void feed(struct ao *ao)
+     if (sample_buffer) CFRelease(sample_buffer);
+ }
+ 
++// True remaining playout, measured against the synchronizer's timebase at
++// call time: frozen while the timebase is halted (pause, priming, zombie
++// route), stepping back on a sink re-anchor, immune to how long reads have
++// been withheld. This is what makes the core's reported audio position
++// follow what the sink actually plays instead of wall-clock extrapolation.
++static double get_delay(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    int64_t end = p->end_time_av;
++    if (end < 0)
++        return 0;
++    int64_t now = CMTimeGetNanoseconds([p->synchronizer currentTime]);
++    return MPMAX(0, (end - now) / 1e9);
++}
++
+ static void start(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+@@ -792,6 +808,7 @@ static void uninit(struct ao *ao)
+     .reset          = stop,
+     .start          = start,
+     .set_pause      = set_pause,
++    .get_delay      = get_delay,
+ #if TARGET_OS_MAC && !TARGET_OS_IPHONE
+     .list_devs      = ca_get_device_list,
+ #endif
+diff --git a/audio/out/buffer.c b/audio/out/buffer.c
+index 1053d41..74fce30 100644
+--- a/audio/out/buffer.c
++++ b/audio/out/buffer.c
+@@ -309,6 +309,13 @@ double ao_get_delay(struct ao *ao)
+         struct mp_pcm_state state;
+         get_dev_state(ao, &state);
+         driver_delay = state.delay;
++    } else if (ao->driver->get_delay) {
++        // The driver measures remaining playout against its own device
++        // clock at call time: frozen while that clock is halted (pause,
++        // sink priming), stepping back on a sink re-anchor, never creeping
++        // between reads. Supersedes both the wall extrapolation and the
++        // pause-snapshot freeze below.
++        driver_delay = MPMAX(0, ao->driver->get_delay(ao));
+     } else {
+         int64_t end = p->end_time_ns;
+         int64_t now = mp_time_ns();
+diff --git a/audio/out/internal.h b/audio/out/internal.h
+index 85fa777..704c32f 100644
+--- a/audio/out/internal.h
++++ b/audio/out/internal.h
+@@ -173,6 +173,12 @@ struct ao_driver {
+     bool (*write)(struct ao *ao, void **data, int samples);
+     // push based: return mandatory stream information
+     void (*get_state)(struct ao *ao, struct mp_pcm_state *state);
++    // pull based, optional: return the true remaining playout time (seconds)
++    // of everything read so far, measured against the device's own clock at
++    // call time. When set, this replaces the core's wall-clock extrapolation
++    // between reads (end_time_ns - now), which free-runs while the driver
++    // withholds reads and snaps at the next read. Must be thread-safe.
++    double (*get_delay)(struct ao *ao);
+ 
+     // Return the list of devices currently available in the system. Use
+     // ao_device_list_add() to add entries. The selected device will be set as
